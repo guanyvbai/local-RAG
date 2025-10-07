@@ -1,0 +1,38 @@
+# 文件名: backend/requirements.txt, 版本号: 2.5
+# Web Framework
+fastapi
+uvicorn[standard]
+python-multipart
+
+# RAG Core
+qdrant-client==1.9.1
+sentence-transformers
+langchain
+tiktoken
+
+# LLM Support
+ollama
+openai
+
+# Document Parsers
+pypdf
+python-docx
+openpyxl
+pandas
+tabulate
+unstructured[pdf,docx,md]
+markdown
+# --- 【核心修正】新增 python-magic，配合系统库 libmagic1 使用 ---
+python-magic
+lxml
+
+# Authentication
+passlib[bcrypt]
+python-jose[cryptography]
+bcrypt==3.2.0
+
+# 明确指定 PyTorch CPU 版本，避免下载庞大的CUDA库
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+torchaudio

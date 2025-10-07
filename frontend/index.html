@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>本地知识问答 RAG</title>
+    <link rel="stylesheet" href="local_deps/atom-one-dark.min.css">
+    <script src="local_deps/highlight.min.js"></script>
+    <script src="local_deps/marked.min.js"></script>
+    <style>
+        :root{--bg-color:#131314;--surface-color:#1e1f20;--primary-text-color:#e3e3e3;--secondary-text-color:#bdc1c6;--border-color:#3c4043;--accent-color:#8ab4f8;--font-family:'Google Sans',Roboto,Arial,sans-serif}
+        body{background-color:var(--bg-color);color:var(--primary-text-color);font-family:var(--font-family);margin:0;display:flex;height:100vh;overflow:hidden}
+        .sidebar{width:260px;background-color:var(--surface-color);padding:1rem;display:flex;flex-direction:column;border-right:1px solid var(--border-color);flex-shrink:0;gap:1rem}
+        .sidebar-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem}
+        .sidebar h2{font-size:1rem;border-bottom:1px solid var(--border-color);padding-bottom:.5rem;margin-top:0;font-weight:500}
+        #new-chat-btn{background-color:var(--accent-color);color:var(--bg-color);border:none;border-radius:99px;padding:.5rem 1rem;font-size:.9rem;font-weight:700;cursor:pointer}
+        .chat-history-list{list-style:none;padding:0;margin:0;overflow-y:auto;flex-grow:1;min-height:100px}
+        .chat-history-list::-webkit-scrollbar{width:4px}
+        .chat-history-list::-webkit-scrollbar-thumb{background:#555}
+        .chat-history-list li{display:flex;align-items:center;gap:.5rem;padding:.5rem;border-radius:4px;cursor:pointer}
+        .chat-history-list li:hover{background-color:#2a2b2c}
+        .chat-history-list li.active{background-color:var(--accent-color);color:var(--bg-color)}
+        .chat-title{flex-grow:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.9rem}
+        .chat-actions{display:none;gap:.25rem}
+        .chat-history-list li:hover .chat-actions, .chat-history-list li.active .chat-actions{display:flex}
+        .action-btn{background:0 0;border:none;color:var(--secondary-text-color);cursor:pointer;padding:.25rem;border-radius:4px}
+        .action-btn:hover{color:var(--primary-text-color);background-color:#3c4043}
+        li.active .action-btn{color:var(--bg-color)}
+        li.active .action-btn:hover{background-color:rgba(255,255,255,0.2)}
+        .rename-input{background-color:#444;border:1px solid var(--accent-color);color:var(--primary-text-color);border-radius:4px;padding:.25rem;font-size:.9rem;width:120px}
+        .sidebar-footer{border-top:1px solid var(--border-color);padding-top:1rem;margin-top:auto;flex-shrink:0}
+        .sidebar-footer a {display:block;padding:.75rem;background-color:var(--surface-color);border:1px solid var(--border-color);border-radius:4px;text-decoration:none;color:var(--primary-text-color);text-align:center;font-size:.9rem; width: 100%; box-sizing: border-box;}
+        .sidebar-footer a:hover{background-color:#2a2b2c}
+        .main-content{flex-grow:1;display:flex;justify-content:center}.container{width:100%;max-width:860px;display:flex;flex-direction:column;height:100%;padding:0 1rem;box-sizing:border-box}header{display:flex;justify-content:space-between;align-items:center;padding:1rem 0;flex-shrink:0}header h1{font-size:1.25rem;margin:0;font-weight:500}.header-right{display:flex;align-items:center;gap:1rem}#logout-button{background:var(--surface-color);border:1px solid var(--border-color);color:var(--primary-text-color);padding:.5rem 1rem;border-radius:99px;cursor:pointer}
+        .chat-window{flex-grow:1;overflow-y:auto;padding:1rem 0;display:flex;flex-direction:column}.chat-window::-webkit-scrollbar{width:8px}.chat-window::-webkit-scrollbar-track{background:transparent}.chat-window::-webkit-scrollbar-thumb{background:#444;border-radius:4px}.chat-window::-webkit-scrollbar-thumb:hover{background:#555}.chat-log{display:flex;flex-direction:column;gap:2rem;width:100%}.welcome-view{text-align:center;margin:auto}.welcome-view .gemini-logo{font-size:4rem;font-weight:700;background:-webkit-linear-gradient(45deg,#4285F4,#9B72CB,#D96570,#F2A600);-webkit-background-clip:text;-webkit-text-fill-color:transparent}.welcome-view h2{font-size:1.5rem;font-weight:500;color:#888}.message{display:flex;gap:1rem;width:100%;line-height:1.75}.avatar{width:32px;height:32px;border-radius:50%;background-color:var(--accent-color);color:var(--bg-color);display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;margin-top:2px}.assistant-message .avatar{background:-webkit-linear-gradient(45deg,#4285F4,#9B72CB)}.message-content{padding-top:4px;flex-grow:1}.message-content p{margin:0 0 1rem}.message-content ul,.message-content ol{padding-left:1.5rem}.message-content li{margin-bottom:.5rem}.message-content pre{background-color:#0d0d0d;border:1px solid var(--border-color);border-radius:8px;padding:1rem;overflow-x:auto;position:relative}.message-content code{font-family:'Fira Code','Courier New',monospace;font-size:.9em}.code-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;font-size:.8rem;color:var(--secondary-text-color)}.copy-btn{background:var(--surface-color);border:1px solid var(--border-color);color:var(--primary-text-color);padding:.25rem .5rem;border-radius:4px;cursor:pointer}.copy-btn:hover{background-color:#3c4043}.input-area-container{flex-shrink:0;padding:1rem 0 2rem}.input-area{display:flex;align-items:center;gap:1rem;background-color:var(--surface-color);border-radius:99px;padding:.5rem .5rem .5rem 1.5rem}#question-input{flex-grow:1;background:transparent;border:none;outline:none;color:var(--primary-text-color);font-size:1rem;line-height:1.5;resize:none;height:24px;max-height:200px}#send-button{width:40px;height:40px;border-radius:50%;border:none;background-color:var(--accent-color);color:var(--bg-color);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background-color .3s}#send-button:hover{background-color:#9ac2fa}#send-button.loading{background-color:#555;cursor:not-allowed;animation:spin 1s linear infinite}@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+        .workflow-selector-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 1rem;
+            margin-bottom: 0.5rem;
+            color: var(--secondary-text-color);
+            font-size: 0.9rem;
+        }
+        #workflow-selector {
+            background-color: var(--surface-color);
+            color: var(--primary-text-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 0.25rem 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h2>近期对话</h2>
+            <button id="new-chat-btn">+ 新对话</button>
+        </div>
+        <ul class="chat-history-list" id="chat-history-list"></ul>
+        <div class="sidebar-footer">
+            <a href="/documents.html">管理知识库</a>
+        </div>
+    </aside>
+
+    <div class="main-content">
+      <div class="container">
+          <header>
+              <h1 id="chat-title">本地RAG</h1>
+              <div class="header-right">
+                <button id="logout-button">登出</button>
+              </div>
+          </header>
+          <main class="chat-window">
+              <div class="chat-log" id="chat-log">
+                  <div class="welcome-view" id="welcome-view">
+                      <div class="gemini-logo">G</div>
+                      <h2>开始一段新的对话</h2>
+                  </div>
+              </div>
+          </main>
+          <footer class="input-area-container">
+              <div class="workflow-selector-container">
+                  <label for="workflow-selector">选择业务场景:</label>
+                  <select id="workflow-selector">
+                      </select>
+              </div>
+              <div class="input-area">
+                  <textarea id="question-input" placeholder="请输入你的问题..." rows="1"></textarea>
+                  <button id="send-button" title="发送">
+                      <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="#131314"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2 .01 7z"/></svg>
+                  </button>
+              </div>
+          </footer>
+      </div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    const token = localStorage.getItem('rag_access_token');
+    if (!token) { window.location.href = '/login.html'; return; }
+    const headers = { 'Authorization': `Bearer ${token}` };
+
+    const chatLog = document.getElementById('chat-log');
+    const questionInput = document.getElementById('question-input');
+    const sendButton = document.getElementById('send-button');
+    const welcomeView = document.getElementById('welcome-view');
+    const newChatBtn = document.getElementById('new-chat-btn');
+    const chatHistoryList = document.getElementById('chat-history-list');
+    const logoutButton = document.getElementById('logout-button');
+    const workflowSelector = document.getElementById('workflow-selector');
+    
+    let currentChatId = null;
+
+    async function loadWorkflows() {
+        try {
+            const response = await fetch('/api/workflows', { headers });
+            if (!response.ok) {
+                if(response.status === 401) window.location.href = '/login.html';
+                throw new Error('Failed to load workflows');
+            }
+            const workflows = await response.json();
+            workflowSelector.innerHTML = '';
+            workflows.forEach(workflow => {
+                const option = document.createElement('option');
+                option.value = workflow.value;
+                option.textContent = workflow.name;
+                workflowSelector.appendChild(option);
+            });
+        } catch (e) {
+            console.error(e);
+            workflowSelector.innerHTML = '<option value="rag_query">知识库问答 (默认)</option>';
+        }
+    }
+
+    async function loadUserChats() {
+        try {
+            const response = await fetch('/api/chats', { headers });
+            if(!response.ok) { if(response.status === 401) { window.location.href = '/login.html'; } throw new Error('Failed'); }
+            const chats = await response.json();
+            renderChatList(chats);
+            if (chats.length > 0 && !currentChatId) {
+                switchChat(chats[0].id);
+            } else if (chats.length === 0) {
+                startNewChat();
+            }
+        } catch(e) { console.error(e); }
+    }
+
+    function renderChatList(chats) {
+        chatHistoryList.innerHTML = '';
+        chats.forEach(chat => {
+            const li = document.createElement('li');
+            li.dataset.chatId = chat.id;
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'chat-title';
+            titleSpan.textContent = chat.title;
+            li.appendChild(titleSpan);
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'chat-actions';
+            const renameBtn = document.createElement('button');
+            renameBtn.className = 'action-btn';
+            renameBtn.innerHTML = '✏️';
+            renameBtn.title = '重命名';
+            renameBtn.onclick = (e) => { e.stopPropagation(); toggleRename(li, chat.id, chat.title); };
+            actionsDiv.appendChild(renameBtn);
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'action-btn';
+            deleteBtn.innerHTML = '🗑️';
+            deleteBtn.title = '删除';
+            deleteBtn.onclick = (e) => { e.stopPropagation(); deleteChat(chat.id); };
+            actionsDiv.appendChild(deleteBtn);
+            li.appendChild(actionsDiv);
+            li.addEventListener('click', () => switchChat(chat.id));
+            if (chat.id === currentChatId) {
+                li.classList.add('active');
+            }
+            chatHistoryList.appendChild(li);
+        });
+    }
+    
+    function toggleRename(li, chatId, currentTitle) {
+        const titleSpan = li.querySelector('.chat-title');
+        const existingInput = li.querySelector('.rename-input');
+        if (existingInput) return;
+        titleSpan.style.display = 'none';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'rename-input';
+        input.value = currentTitle;
+        const saveRename = async () => {
+            const newTitle = input.value.trim();
+            if (newTitle && newTitle !== currentTitle) {
+                await fetch(`/api/chats/${chatId}/rename`, {
+                    method: 'PUT',
+                    headers: { ...headers, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ new_title: newTitle })
+                });
+                titleSpan.textContent = newTitle;
+            }
+            li.removeChild(input);
+            titleSpan.style.display = 'block';
+        };
+        input.onblur = saveRename;
+        input.onkeydown = (e) => {
+            if (e.key === 'Enter') saveRename();
+            if (e.key === 'Escape') {
+                li.removeChild(input);
+                titleSpan.style.display = 'block';
+            }
+        };
+        li.insertBefore(input, li.querySelector('.chat-actions'));
+        input.focus();
+        input.select();
+    }
+
+    async function deleteChat(chatId) {
+        if (!confirm('确定要删除这段对话吗？此操作无法撤销。')) return;
+        await fetch(`/api/chats/${chatId}`, { method: 'DELETE', headers });
+        if (currentChatId === chatId) {
+            currentChatId = null;
+        }
+        loadUserChats();
+    }
+
+    async function switchChat(chatId) {
+        if(currentChatId === chatId && chatLog.children.length > 1) return;
+        currentChatId = chatId;
+        const response = await fetch(`/api/chats/${chatId}`,{headers});
+        if(!response.ok){ if(response.status===401) window.location.href='/login.html'; return; }
+        const messages = await response.json();
+        chatLog.innerHTML='';
+        if (!document.body.contains(welcomeView)) {}
+        if (messages.length === 0) {
+            chatLog.appendChild(welcomeView);
+            welcomeView.style.display = 'block';
+        } else {
+            if (document.body.contains(welcomeView)) {
+                welcomeView.style.display = 'none';
+            }
+            messages.forEach(msg => addMessage(msg.role, msg.content));
+        }
+        document.querySelectorAll('.chat-history-list li').forEach(li => {
+            li.classList.toggle('active', parseInt(li.dataset.chatId) === chatId);
+        });
+    }
+
+    async function startNewChat() {
+        try {
+            const response = await fetch('/api/chats', { method: 'POST', headers });
+            if (!response.ok) { if (response.status === 401) window.location.href = '/login.html'; throw new Error('Failed to create chat');}
+            const newChat = await response.json();
+            await loadUserChats();
+            await switchChat(newChat.id);
+        } catch (e) { console.error(e); }
+    }
+    
+    newChatBtn.addEventListener('click', startNewChat);
+    logoutButton.addEventListener('click',()=>{localStorage.removeItem('rag_access_token');window.location.href='/login.html'});
+    questionInput.addEventListener('input',()=>{questionInput.style.height='auto';questionInput.style.height=questionInput.scrollHeight+'px'});
+
+    async function handleSend() {
+        const question = questionInput.value.trim();
+        const selectedWorkflow = workflowSelector.value;
+        if (!question || !currentChatId) return;
+        setLoading(true);
+        addMessage('user', question);
+        questionInput.value = '';
+        questionInput.style.height = 'auto';
+        const assistantMessageElem = addMessage('assistant', '▍');
+
+        try {
+            const response = await fetch('http://localhost:5678/webhook/ask', {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    question, 
+                    chat_id: currentChatId,
+                    workflow: selectedWorkflow
+                })
+            });
+
+            if (!response.ok) { if (response.status === 401) window.location.href = '/login.html'; throw new Error(`HTTP error!`); }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let fullResponse = "";
+            let isFirstChunk = true;
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (isFirstChunk) { assistantMessageElem.innerHTML = ""; isFirstChunk = false; }
+                fullResponse += decoder.decode(value, { stream: true });
+                assistantMessageElem.innerHTML = marked.parse(fullResponse + "▍");
+            }
+            assistantMessageElem.innerHTML = marked.parse(fullResponse);
+            assistantMessageElem.querySelectorAll("pre code").forEach(addCodeBlockFeatures);
+        } catch (error) {
+            assistantMessageElem.innerHTML = `<p style="color:red;">抱歉，回答时出现错误。</p>`;
+        } finally {
+            setLoading(false);
+        }
+    }
+    
+    function addMessage(sender, text) {
+        if(welcomeView && sender === 'user') welcomeView.style.display = "none";
+        const messageElem = document.createElement("div");
+        messageElem.classList.add("message", `${sender}-message`);
+        const avatar = document.createElement("div");
+        avatar.classList.add("avatar");
+        const messageContent = document.createElement("div");
+        messageContent.classList.add("message-content");
+        if (sender === "user") {
+            avatar.textContent = "U";
+            const p = document.createElement("p");
+            p.textContent = text;
+            messageContent.appendChild(p);
+        } else {
+            avatar.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="20px" height="20px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-2h2v2zm2-4h-2V7h2z"/></svg>';
+            messageContent.innerHTML = marked.parse(text);
+            messageContent.querySelectorAll("pre code").forEach(addCodeBlockFeatures);
+        }
+        messageElem.appendChild(avatar);
+        messageElem.appendChild(messageContent);
+        chatLog.appendChild(messageElem);
+        chatLog.parentElement.scrollTop = chatLog.parentElement.scrollHeight;
+        return messageContent;
+    }
+
+    function addCodeBlockFeatures(block) {
+        const pre = block.parentElement;
+        const langMatch = block.className.match(/language-(\S+)/);
+        const lang = langMatch ? langMatch[1] : "text";
+        const header = document.createElement("div");
+        header.className = "code-header";
+        const langName = document.createElement("span");
+        langName.textContent = lang;
+        const copyBtn = document.createElement("button");
+        copyBtn.className = "copy-btn";
+        copyBtn.textContent = "复制";
+        copyBtn.addEventListener("click", () => {
+            navigator.clipboard.writeText(block.textContent).then(() => {
+                copyBtn.textContent = "已复制!";
+                setTimeout(() => copyBtn.textContent = "复制", 2000);
+            });
+        });
+        header.appendChild(langName);
+        header.appendChild(copyBtn);
+        pre.insertBefore(header, block);
+        hljs.highlightElement(block);
+    }
+
+    function setLoading(isLoading) {
+        sendButton.disabled = isLoading;
+        questionInput.disabled = isLoading;
+        if (isLoading) {
+            sendButton.classList.add("loading");
+            sendButton.innerHTML = "";
+        } else {
+            sendButton.classList.remove("loading");
+            sendButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="#131314"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2 .01 7z"/></svg>';
+        }
+    }
+    
+    sendButton.addEventListener('click', handleSend);
+    questionInput.addEventListener('keypress', e => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
+    });
+
+    // 页面加载时，先加载工作流，再加载聊天记录
+    await loadWorkflows();
+    loadUserChats();
+});
+</script>
+</body>
+</html>
