@@ -1,4 +1,4 @@
-# 文件名: backend/config.py, 版本号: 2.4
+# 文件名: backend/config.py, 版本号: 2.5
 """
 项目配置文件。
 集中管理所有硬编码的常量和从环境变量加载的配置。
@@ -33,6 +33,9 @@ QDRANT_COLLECTION_NAME = "general"
 # --- RAG Self-Correction Settings ---
 MAX_QUERY_RETRY_LOOPS = 2
 ROUTING_CONFIDENCE_THRESHOLD = 0.82
+
+# --- 【核心新增】Reranker Model Settings ---
+RERANK_MODEL_NAME = "ms-marco-MiniLM-L-12-v2" # flashrank 使用的轻量级、高性能模型
 
 # --- Embedding Model Settings ---
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "ollama")

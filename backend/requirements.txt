@@ -1,5 +1,6 @@
 # 文件名: backend/requirements.txt, 版本号: 2.5
 # Web Framework
+# Web Framework
 fastapi
 uvicorn[standard]
 python-multipart
@@ -22,7 +23,6 @@ pandas
 tabulate
 unstructured[pdf,docx,md]
 markdown
-# --- 【核心修正】新增 python-magic，配合系统库 libmagic1 使用 ---
 python-magic
 lxml
 
@@ -30,6 +30,10 @@ lxml
 passlib[bcrypt]
 python-jose[cryptography]
 bcrypt==3.2.0
+
+# --- 【核心新增】用于Rerank和BM25稀疏检索 ---
+rank-bm25
+flashrank
 
 # 明确指定 PyTorch CPU 版本，避免下载庞大的CUDA库
 --extra-index-url https://download.pytorch.org/whl/cpu
