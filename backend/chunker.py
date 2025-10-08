@@ -1,14 +1,15 @@
-# 文件名: backend/chunker.py, 版本号: 4.1
+/* 文件名: backend/chunker.py, 版本号: 4.2 */
 """
-【V4.1 健壮版】:
-- 加固了LLM的任务生成函数(_call_llm_for_tasks)，使其能从不完美的模型输出中稳健地提取JSON内容。
-- 优化了Prompt，更明确地指示LLM不要返回额外文本。
-- 保持了语义分块与HyDE策略。
+【V4.2 终极健壮版】:
+- 在调用 Ollama API 时强制指定 format="json"，从源头上确保输出格式的稳定性。
+- 使用正则表达式 (re.search) 替代简单的字符串查找，能更精准地从混杂文本中提取出有效的 JSON 对象。
+- 进一步增强了对不完整或格式错误的 LLM 输出的容错能力。
 """
 import hashlib
 import logging
 import uuid
 import json
+import re  # <-- 导入 re 模块
 from typing import List, Dict, Any, TYPE_CHECKING
 import ollama 
 
@@ -68,17 +69,16 @@ def _call_llm_for_tasks(text_chunk: str) -> dict:
             model=config.OLLAMA_MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.1},
-            stream=False
+            stream=False,
+            format="json"  # <-- 【核心优化1】强制Ollama返回JSON格式
         )
         
         response_text = response['message']['content'].strip()
 
-        # --- 【健壮性加固】从模型返回的文本中稳健地提取JSON ---
-        json_start = response_text.find('{')
-        json_end = response_text.rfind('}') + 1
-
-        if json_start != -1 and json_end != -1 and json_end > json_start:
-            json_string = response_text[json_start:json_end]
+        # --- 【核心优化2】使用正则表达式从返回文本中提取最外层的JSON对象 ---
+        match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if match:
+            json_string = match.group(0)
             tasks = json.loads(json_string)
             if "summary" not in tasks or "hypothetical_question" not in tasks:
                 raise ValueError("LLM返回的JSON缺少必要字段。")
