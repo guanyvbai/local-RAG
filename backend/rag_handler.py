@@ -1,24 +1,21 @@
-# 文件名: backend/rag_handler.py, 版本号: 3.5
+# 文件名: backend/rag_handler.py, 版本号: 4.0
 """
 RAG (Retrieval-Augmented Generation) 核心处理器。
-【V3.5 质量飞跃版】:
-- 实现了真正的BM25混合检索，通过为每个集合持久化BM25模型来解决关键词检索失效的问题。
-- 增加了 BM25 模型的加载、保存与重建逻辑。
-- 优化了查询时稀疏向量的生成方式，大幅提升检索准确率。
+【V4.0 架构优化版】:
+- 适配 chunker V4.0，支持为每个父块索引多个子向量（摘要+假设性问题）。
+- 保持混合检索、Rerank等高级功能。
 """
 import ollama
 import openai
 from qdrant_client import QdrantClient, models
-from qdrant_client.http.models import Batch
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Union, Generator, Any
 
 import logging
 import time
 import os
-import pickle # <-- 新增导入
+import pickle 
 
-# --- 新增导入 ---
 from rank_bm25 import BM25Okapi
 from flashrank import Ranker, RerankRequest
 
@@ -29,10 +26,8 @@ from chunker import create_multi_vector_chunks, ParentChunk, ChildChunk
 
 logger = logging.getLogger(__name__)
 
-# 定义BM25模型文件的存储路径
 BM25_MODELS_DIR = "/app/data/bm25_models"
 os.makedirs(BM25_MODELS_DIR, exist_ok=True)
-
 
 class RAGHandler:
     def __init__(self):
@@ -61,20 +56,17 @@ class RAGHandler:
             llm_client=self.llm_client
         )
         
-        # 缓存BM25模型以避免重复加载
         self.bm25_models_cache = {}
 
         for collection_name in config.AVAILABLE_COLLECTIONS:
             self._ensure_collection_is_up_to_date(collection_name)
 
-    # --- BM25 模型持久化管理 ---
     def _get_bm25_model_path(self, collection_name: str) -> str:
         return os.path.join(BM25_MODELS_DIR, f"{collection_name}_bm25.pkl")
 
     def _load_bm25_model(self, collection_name: str) -> BM25Okapi:
         if collection_name in self.bm25_models_cache:
             return self.bm25_models_cache[collection_name]
-
         model_path = self._get_bm25_model_path(collection_name)
         if os.path.exists(model_path):
             with open(model_path, "rb") as f:
@@ -92,26 +84,25 @@ class RAGHandler:
             pickle.dump(model, f)
     
     def _rebuild_bm25_model_for_collection(self, collection_name: str):
-        """为整个集合重建BM25模型"""
         logger.info(f"Rebuilding BM25 model for collection '{collection_name}'...")
         try:
-            all_summaries = []
+            all_child_docs = []
             scroll_result, next_page = self.qdrant_client.scroll(
-                collection_name=collection_name, limit=1000, with_payload=["summary_content"]
+                collection_name=collection_name, limit=1000, with_payload=["child_content"]
             )
             while scroll_result:
-                all_summaries.extend([hit.payload['summary_content'] for hit in scroll_result if hit.payload.get('summary_content')])
+                all_child_docs.extend([hit.payload['child_content'] for hit in scroll_result if hit.payload.get('child_content')])
                 if not next_page:
                     break
                 scroll_result, next_page = self.qdrant_client.scroll(
-                    collection_name=collection_name, limit=1000, with_payload=["summary_content"], offset=next_page
+                    collection_name=collection_name, limit=1000, with_payload=["child_content"], offset=next_page
                 )
             
-            if all_summaries:
-                tokenized_corpus = [doc.split() for doc in all_summaries]
+            if all_child_docs:
+                tokenized_corpus = [doc.split() for doc in all_child_docs]
                 bm25 = BM25Okapi(tokenized_corpus)
                 self._save_bm25_model(collection_name, bm25)
-                logger.info(f"Successfully rebuilt and saved BM25 model for '{collection_name}' with {len(all_summaries)} documents.")
+                logger.info(f"Successfully rebuilt and saved BM25 model for '{collection_name}' with {len(all_child_docs)} documents.")
             else:
                 logger.warning(f"No documents found in '{collection_name}' to build BM25 model.")
         except Exception as e:
@@ -161,9 +152,7 @@ class RAGHandler:
 
     def hybrid_retrieve(self, query: str, top_k: int = 20) -> List[Dict[str, Any]]:
         routed_collection = self.query_router.route_query(query)
-        if not routed_collection:
-            return []
-        
+        if not routed_collection: return []
         dense_vector = self._generate_embeddings(query)
         if not dense_vector: return []
         dense_hits = self.qdrant_client.search(
@@ -172,15 +161,13 @@ class RAGHandler:
             limit=top_k,
             with_payload=True
         )
-
         sparse_hits = []
         bm25_model = self._load_bm25_model(routed_collection)
         if bm25_model:
             logger.info(f"Found BM25 model for '{routed_collection}'. Performing sparse search.")
             query_keywords = query.split()
             sparse_vector = self._get_bm25_vector_for_query(bm25_model, query_keywords)
-            
-            if sparse_vector.indices: # 只有在查询词存在于词汇表时才进行搜索
+            if sparse_vector.indices:
                 sparse_hits = self.qdrant_client.search(
                     collection_name=routed_collection,
                     query_vector=models.NamedSparseVector(name="bm25", vector=sparse_vector),
@@ -191,14 +178,13 @@ class RAGHandler:
                 logger.warning("Query keywords not found in BM25 vocabulary. Skipping sparse search.")
         else:
             logger.warning(f"No BM25 model found for '{routed_collection}'. Skipping sparse search.")
-
         combined_passages = {}
         for hit in dense_hits + sparse_hits:
             parent_id = hit.payload.get('parent_id')
             if parent_id and parent_id not in combined_passages:
                 combined_passages[parent_id] = {
                     "id": parent_id,
-                    "text": hit.payload.get("summary_content"),
+                    "text": hit.payload.get("child_content"),
                     "meta": hit.payload
                 }
         return list(combined_passages.values())
@@ -208,35 +194,40 @@ class RAGHandler:
         multi_vector_chunks = create_multi_vector_chunks(parsed_elements, filename)
         if not multi_vector_chunks:
             return
-        points = []
-        for parent_chunk, child_chunk in multi_vector_chunks:
-            dense_vector = self._generate_embeddings(child_chunk.content)
-            if dense_vector:
-                payload = parent_chunk.to_qdrant_payload()
-                payload["summary_content"] = child_chunk.content
-                payload["collection"] = collection_name
-                points.append(models.PointStruct(
-                    id=child_chunk.chunk_id,
-                    vector={"dense": dense_vector}, 
-                    payload=payload
-                ))
-        if points:
-            self.qdrant_client.upsert(collection_name=collection_name, points=points, wait=True)
-            logger.info(f"Successfully upserted {len(points)} points for '{filename}'.")
+        
+        points_to_upsert = []
+        # 【核心升级】迭代父块和其对应的多个子块
+        for parent_chunk, child_chunks in multi_vector_chunks:
+            parent_payload = parent_chunk.to_qdrant_payload()
+            parent_payload["collection"] = collection_name
+            
+            for child_chunk in child_chunks:
+                dense_vector = self._generate_embeddings(child_chunk.content)
+                if dense_vector:
+                    # 子块的payload继承自父块，并加入自己的信息
+                    child_payload = parent_payload.copy()
+                    child_payload["child_content"] = child_chunk.content
+                    child_payload["content_type"] = child_chunk.content_type
+                    
+                    points_to_upsert.append(models.PointStruct(
+                        id=child_chunk.chunk_id,
+                        vector={"dense": dense_vector}, 
+                        payload=child_payload
+                    ))
+        
+        if points_to_upsert:
+            self.qdrant_client.upsert(collection_name=collection_name, points=points_to_upsert, wait=True)
+            logger.info(f"Successfully upserted {len(points_to_upsert)} child vectors for '{filename}'.")
+            # 在所有点都插入后，为整个集合重建BM25模型
             self._rebuild_bm25_model_for_collection(collection_name)
         else:
             logger.warning(f"No points were generated for file '{filename}'.")
     
     def _get_bm25_vector_for_query(self, bm25_model: BM25Okapi, query_keywords: List[str]) -> models.SparseVector:
-        """【核心升级】使用加载的BM25模型为查询生成稀疏向量。"""
-        # doc_freqs 是一个包含词项及其在语料库中出现频率的列表，但 rank_bm25 没有直接暴露
-        # 我们需要一个词汇表
         if not hasattr(bm25_model, 'word_to_id'):
             bm25_model.word_to_id = {word: i for i, word in enumerate(bm25_model.idf)}
-
         indices = [bm25_model.word_to_id[word] for word in query_keywords if word in bm25_model.word_to_id]
         values = [bm25_model.idf[word] for word in query_keywords if word in bm25_model.word_to_id]
-
         return models.SparseVector(indices=indices, values=values)
 
     def create_collection(self, collection_name: str) -> bool:
@@ -299,7 +290,6 @@ class RAGHandler:
 2.  **明确引用**: 在回答时，清楚地说明你的信息来源于知识库。例如，你可以说：“根据知识库中的信息...”。
 3.  **坦诚未知**: 如果“[知识库上下文]”为空，或者上下文内容与用户问题完全无关，无法找到答案，你**必须**明确地回答：“抱歉，我在知识库中没有找到与您问题相关的确切信息。” **严禁**使用自己的内置知识回答。
 4.  **整合信息**: 如果多段上下文都与问题相关，请将它们进行逻辑整合，用流畅的语言进行回复，而不是简单地罗列。
-
 ---
 [知识库上下文]
 {context_str}
