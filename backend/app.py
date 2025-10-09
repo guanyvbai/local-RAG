@@ -1,10 +1,10 @@
-# /* 文件名: backend/app.py, 版本号: 2.2 */
+# /* 文件名: backend/app.py, 版本号: 2.7 */
 """
 FastAPI 主应用程序文件。
-【V2.2 更新】:
-- 集成了 Text-to-SQL 功能。
-- 导入并初始化了 SQLQueryHandler。
-- 新增 /api/sql_query 路由，用于接收来自 n8n 的数据库问答请求。
+【V2.7 更新】:
+- /api/load_nvd_data 路由现在接收一个目录路径，并默认为 /app/data/nvd_data。
+- 引入独立的 cve_handler 模块处理漏洞查询。
+- 新增 /api/cve_lookup 路由，由 cve_handler 负责其逻辑。
 """
 
 # 1. 首先进行日志配置
@@ -20,21 +20,22 @@ import os
 import io
 import sqlite3
 import re
+import time
 from fastapi import (
     FastAPI, Depends, UploadFile, File, HTTPException, Request, Form, status, Response
 )
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
-from typing import List, Dict
-import time
+from typing import List, Dict, Optional, Any
 
 # 导入我们自己的模块
 import config
 import auth
 import document_parser
 from rag_handler import rag_handler
-from sql_query_handler import SQLQueryHandler  # <-- 【核心新增】导入SQL处理器
+from sql_query_handler import SQLQueryHandler
+from cve_handler import cve_handler  # <-- 【核心新增】
 
 # --- 数据库设置 ---
 DATA_DIR = "/app/data"
@@ -123,7 +124,6 @@ def rename_chat(chat_id: int, new_title: str, user_id: int):
 # --- FastAPI 应用实例和启动事件 ---
 app = FastAPI(title="Intelligent RAG & SQL System")
 
-# --- 【核心新增】实例化 Text-to-SQL 处理器 ---
 try:
     sql_handler = SQLQueryHandler()
     logger.info("SQLQueryHandler 初始化成功。")
@@ -147,9 +147,15 @@ class Token(BaseModel):
 class AskRequest(BaseModel):
     question: str
     chat_id: int
-    
-class SQLQueryRequest(BaseModel): # <-- 【核心新增】
+
+class SQLQueryRequest(BaseModel):
     question: str
+
+class CPELookupRequest(BaseModel): # <-- 【核心新增】
+    cpe: str
+
+class NVDLoadRequest(BaseModel): # <-- 【核心新增】
+    directory_path: str = "/app/data/nvd_data" # 设置默认路径
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
@@ -268,9 +274,6 @@ async def rename_chat_endpoint(chat_id: int, request: RenameChatRequest, current
 @app.post("/api/ask")
 async def ask(request: AskRequest, current_user: User = Depends(get_current_active_user)):
     """处理 RAG 知识库问答请求"""
-    start_time = time.time()
-    logger.info(f"[TIMING] Received RAG request for chat_id: {request.chat_id}")
-    
     add_message_to_chat(request.chat_id, "user", request.question)
     
     messages = get_chat_messages(request.chat_id, current_user.id)
@@ -288,38 +291,52 @@ async def ask(request: AskRequest, current_user: User = Depends(get_current_acti
             for chunk in answer_generator:
                 full_response += chunk
                 yield chunk
-            
-            end_time = time.time()
-            logger.info(f"[TIMING] RAG request duration: {end_time - start_time:.2f} seconds")
             add_message_to_chat(request.chat_id, "assistant", full_response)
-
         except Exception as e:
             logger.error(f"Error during RAG answer generation: {e}", exc_info=True)
-            end_time = time.time()
-            logger.info(f"[TIMING] RAG request failed after: {end_time - start_time:.2f} seconds")
             yield "抱歉，回答时出现错误。"
     
     return StreamingResponse(stream_generator(), media_type="text/plain")
 
-# --- 【核心新增】Text-to-SQL API 端点 ---
 @app.post("/api/sql_query", response_class=Response)
 async def sql_query(request: SQLQueryRequest, current_user: User = Depends(get_current_active_user)):
-    """
-    接收自然语言问题，生成并返回SQL查询。此端点由 n8n 调用。
-    """
+    """处理 Text-to-SQL 请求"""
     if not sql_handler:
-        raise HTTPException(status_code=500, detail="SQLQueryHandler 未成功初始化，无法处理请求。")
+        raise HTTPException(status_code=500, detail="SQLQueryHandler 未成功初始化。")
     
     logger.info(f"接收到 SQL 查询请求: '{request.question}'")
-    
-    # 1. 获取最新的数据库结构
     db_schema = sql_handler.get_database_schema()
-    
-    # 2. 生成 SQL 查询
     generated_sql = sql_handler.generate_sql_query(request.question, db_schema)
-    
-    # 3. 将生成的 SQL 作为纯文本返回给 n8n
     return Response(content=generated_sql, media_type="text/plain")
+
+# --- 【核心新增】CPE 漏洞查询路由 ---
+@app.post("/api/cve_lookup", response_model=List[Dict[str, Any]])
+async def cve_lookup(request: CPELookupRequest, current_user: User = Depends(get_current_active_user)):
+    """
+    接收CPE字符串，返回相关的漏洞信息。此端点由 n8n 调用。
+    """
+    return cve_handler.search_vulnerabilities_by_cpe(request.cpe)
+
+# --- 【核心新增】手动加载NVD数据路由 ---
+@app.post("/api/load_nvd_data")
+async def load_nvd_data(request: NVDLoadRequest, current_user: User = Depends(get_current_active_user)):
+    """
+    手动触发NVD JSON数据从指定目录加载到Qdrant。
+    默认加载 /app/data/nvd_data 目录下的所有 .json 文件。
+    """
+    directory_path = request.directory_path
+    if not os.path.isdir(directory_path):
+        raise HTTPException(status_code=404, detail=f"目录未找到: {directory_path}")
+    
+    try:
+        # 在生产环境中，这里应该启动一个后台任务
+        cve_handler.load_nvd_data_from_directory(directory_path)
+        return JSONResponse(
+            content={"status": "success", "message": f"NVD数据加载任务已从目录 '{directory_path}' 启动，请关注后端日志。"}, 
+            status_code=202
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"加载NVD数据时出错: {e}")
 
 # --- 前端页面服务 ---
 @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)

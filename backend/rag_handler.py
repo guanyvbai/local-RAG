@@ -1,9 +1,9 @@
-# 文件名: backend/rag_handler.py, 版本号: 4.0
+# s
 """
 RAG (Retrieval-Augmented Generation) 核心处理器。
-【V4.0 架构优化版】:
-- 适配 chunker V4.0，支持为每个父块索引多个子向量（摘要+假设性问题）。
-- 保持混合检索、Rerank等高级功能。
+【V4.2 持久化修复版】:
+- 重写了集合检查逻辑 `_ensure_collection_exists`，确保服务重启不会删除现有数据。
+- 将破坏性的 `recreate_collection` 修改为安全的 `create_collection`，只在集合不存在时创建。
 """
 import ollama
 import openai
@@ -58,8 +58,9 @@ class RAGHandler:
         
         self.bm25_models_cache = {}
 
+        # --- 【核心修改】在启动时调用新的、安全的检查方法 ---
         for collection_name in config.AVAILABLE_COLLECTIONS:
-            self._ensure_collection_is_up_to_date(collection_name)
+            self._ensure_collection_exists(collection_name)
 
     def _get_bm25_model_path(self, collection_name: str) -> str:
         return os.path.join(BM25_MODELS_DIR, f"{collection_name}_bm25.pkl")
@@ -108,21 +109,47 @@ class RAGHandler:
         except Exception as e:
             logger.error(f"Failed to rebuild BM25 model for '{collection_name}': {e}", exc_info=True)
 
-    def _ensure_collection_is_up_to_date(self, collection_name: str):
+    # --- 【核心修改】重写集合检查与创建逻辑 ---
+    def _ensure_collection_exists(self, collection_name: str):
+        """
+        检查集合是否存在，如果不存在，则创建它。这是一个非破坏性操作。
+        """
         try:
-            collection_info = self.qdrant_client.get_collection(collection_name=collection_name)
-            dense_config = collection_info.vectors_config.params_map.get("dense")
-            is_dense_correct = dense_config and dense_config.size == self.embedding_dim
-            sparse_config = collection_info.sparse_vectors_config.map.get("bm25")
-            is_sparse_correct = sparse_config is not None
-            if is_dense_correct and is_sparse_correct:
-                logger.info(f"Collection '{collection_name}' exists and has the correct configuration.")
-                return
-            logger.warning(f"Collection '{collection_name}' exists but has an outdated configuration. Recreating it.")
-            self.create_collection(collection_name)
-        except Exception:
-            logger.info(f"Collection '{collection_name}' does not exist. Creating it.")
-            self.create_collection(collection_name)
+            self.qdrant_client.get_collection(collection_name=collection_name)
+            logger.info(f"集合 '{collection_name}' 已存在，将直接使用。")
+        except Exception as e:
+            # 捕获因集合不存在而引发的异常 (通常是状态码404)
+            if "not found" in str(e).lower() or "status_code=404" in str(e):
+                logger.warning(f"集合 '{collection_name}' 不存在，现在开始创建...")
+                self.create_collection(collection_name)
+            else:
+                # 对于其他未知错误，则打印出来
+                logger.error(f"检查集合 '{collection_name}' 时发生未知错误: {e}", exc_info=True)
+
+    def create_collection(self, collection_name: str) -> bool:
+        """
+        安全地创建新集合。如果已存在，则不会执行任何操作。
+        """
+        try:
+            # 使用 create_collection 而不是 recreate_collection
+            self.qdrant_client.create_collection(
+                collection_name=collection_name,
+                vectors_config={"dense": models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)},
+                sparse_vectors_config={"bm25": models.SparseVectorParams(index=models.SparseIndexParams(on_disk=False))}
+            )
+            logger.info(f"成功创建混合检索集合: {collection_name}")
+            # 新建集合后，清理可能存在的旧BM25模型文件
+            model_path = self._get_bm25_model_path(collection_name)
+            if os.path.exists(model_path):
+                os.remove(model_path)
+            return True
+        except Exception as e:
+            # 如果集合已经存在，qdrant_client 会抛出异常，这是预期行为
+            if "already exists" in str(e).lower():
+                logger.info(f"集合 '{collection_name}' 已存在，无需重复创建。")
+                return True
+            logger.error(f"创建集合失败 {collection_name}: {e}", exc_info=True)
+            return False
 
     def get_answer(self, query: str, chat_history: List[Dict[str, str]]) -> Generator[str, None, None]:
         overall_start_time = time.time()
@@ -190,13 +217,12 @@ class RAGHandler:
         return list(combined_passages.values())
 
     def process_and_embed_document(self, parsed_elements: List[ParsedElement], filename: str, collection_name: str):
-        self._ensure_collection_is_up_to_date(collection_name)
+        self._ensure_collection_exists(collection_name)
         multi_vector_chunks = create_multi_vector_chunks(parsed_elements, filename)
         if not multi_vector_chunks:
             return
         
         points_to_upsert = []
-        # 【核心升级】迭代父块和其对应的多个子块
         for parent_chunk, child_chunks in multi_vector_chunks:
             parent_payload = parent_chunk.to_qdrant_payload()
             parent_payload["collection"] = collection_name
@@ -204,7 +230,6 @@ class RAGHandler:
             for child_chunk in child_chunks:
                 dense_vector = self._generate_embeddings(child_chunk.content)
                 if dense_vector:
-                    # 子块的payload继承自父块，并加入自己的信息
                     child_payload = parent_payload.copy()
                     child_payload["child_content"] = child_chunk.content
                     child_payload["content_type"] = child_chunk.content_type
@@ -218,7 +243,6 @@ class RAGHandler:
         if points_to_upsert:
             self.qdrant_client.upsert(collection_name=collection_name, points=points_to_upsert, wait=True)
             logger.info(f"Successfully upserted {len(points_to_upsert)} child vectors for '{filename}'.")
-            # 在所有点都插入后，为整个集合重建BM25模型
             self._rebuild_bm25_model_for_collection(collection_name)
         else:
             logger.warning(f"No points were generated for file '{filename}'.")
@@ -229,22 +253,6 @@ class RAGHandler:
         indices = [bm25_model.word_to_id[word] for word in query_keywords if word in bm25_model.word_to_id]
         values = [bm25_model.idf[word] for word in query_keywords if word in bm25_model.word_to_id]
         return models.SparseVector(indices=indices, values=values)
-
-    def create_collection(self, collection_name: str) -> bool:
-        try:
-            self.qdrant_client.recreate_collection(
-                collection_name=collection_name,
-                vectors_config={"dense": models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)},
-                sparse_vectors_config={"bm25": models.SparseVectorParams(index=models.SparseIndexParams(on_disk=False))}
-            )
-            logger.info(f"成功创建或重建混合检索集合: {collection_name}")
-            model_path = self._get_bm25_model_path(collection_name)
-            if os.path.exists(model_path):
-                os.remove(model_path)
-            return True
-        except Exception as e:
-            logger.error(f"创建集合失败 {collection_name}: {e}")
-            return False
 
     def delete_collection(self, collection_name: str) -> bool:
         try:

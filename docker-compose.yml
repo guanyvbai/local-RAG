@@ -1,5 +1,5 @@
 # docker-compose.yml (已根据 .env 文件进行优化)
-version: '3.8'
+# version: '3.8'
 
 services:
   backend:
@@ -11,7 +11,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - app_data:/app/data
+      - ./app_data:/app/data
     env_file:
       - .env
     environment: {}
