@@ -1,15 +1,16 @@
-/* 文件名: backend/chunker.py, 版本号: 4.2 */
+# /* 文件名: backend/chunker.py, 版本号: 4.3 */
 """
-【V4.2 终极健壮版】:
-- 在调用 Ollama API 时强制指定 format="json"，从源头上确保输出格式的稳定性。
-- 使用正则表达式 (re.search) 替代简单的字符串查找，能更精准地从混杂文本中提取出有效的 JSON 对象。
-- 进一步增强了对不完整或格式错误的 LLM 输出的容错能力。
+【V4.3 终极健壮版++】:
+- 在调用Ollama API时，继续强制指定 format="json"。
+- 对解析后的JSON对象，采用更安全的 .get() 方法来获取值，避免因缺少键而直接引发异常。
+- 增加了对获取到的值是否为空的检查，确保只有在 summary 和 hypothetical_question 都有效时才采纳。
+- 统一了所有失败情况（包括JSON解析失败、缺少键、键值为空）的回退逻辑，极大地增强了代码的容错能力。
 """
 import hashlib
 import logging
 import uuid
 import json
-import re  # <-- 导入 re 模块
+import re
 from typing import List, Dict, Any, TYPE_CHECKING
 import ollama 
 
@@ -56,13 +57,14 @@ class ParentChunk:
 
 def _call_llm_for_tasks(text_chunk: str) -> dict:
     """【核心修复】调用LLM并从返回文本中稳健地提取JSON。"""
-    prompt = f"""为以下文本块生成一个简洁摘要和一个可能的用户问题。请严格按照JSON格式返回，不要包含任何解释、代码块标记或其它多余的文本。
+    prompt = f"""为以下文本块生成一个简洁摘要和一个可能的用户问题。请严格按照JSON格式返回，并且必须包含 "summary" 和 "hypothetical_question" 两个键。
 
 [文本块]
 {text_chunk}
 
 [输出JSON]
 """
+    response_text = "" # 初始化以备在异常记录中使用
     try:
         client = ollama.Client(host=config.OLLAMA_BASE_URL)
         response = client.chat(
@@ -70,25 +72,25 @@ def _call_llm_for_tasks(text_chunk: str) -> dict:
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.1},
             stream=False,
-            format="json"  # <-- 【核心优化1】强制Ollama返回JSON格式
+            format="json"  # <-- 强制Ollama返回JSON格式
         )
         
         response_text = response['message']['content'].strip()
+        tasks = json.loads(response_text)
 
-        # --- 【核心优化2】使用正则表达式从返回文本中提取最外层的JSON对象 ---
-        match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if match:
-            json_string = match.group(0)
-            tasks = json.loads(json_string)
-            if "summary" not in tasks or "hypothetical_question" not in tasks:
-                raise ValueError("LLM返回的JSON缺少必要字段。")
+        # --- 【核心优化3】使用 .get() 安全地获取值，并检查内容是否为空 ---
+        summary = tasks.get("summary")
+        question = tasks.get("hypothetical_question")
+
+        if summary and question:
             logger.info(f"成功为块生成摘要和假设性问题，原文始于: '{text_chunk[:100]}...'")
-            return tasks
+            return {"summary": summary, "hypothetical_question": question}
         else:
-            raise ValueError("在LLM的返回内容中未找到有效的JSON对象。")
+            # 即使返回了JSON，但如果缺少字段或字段为空，也视为失败
+            raise ValueError(f"LLM返回的JSON不完整。收到的键: {list(tasks.keys())}")
 
     except (json.JSONDecodeError, ValueError, Exception) as e:
-        logger.error(f"LLM生成任务失败或返回格式错误: {e}")
+        logger.error(f"LLM生成任务失败或返回格式错误: {e}. 模型原始返回: '{response_text}'")
         # 降级策略
         return {
             "summary": text_chunk[:200] + "...",

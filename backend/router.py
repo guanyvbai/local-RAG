@@ -1,9 +1,10 @@
-# backend/router.py (已修正为兼容两种嵌入模型)
+# /* 文件名: backend/router.py, 版本号: 2.0 */
+# backend/router.py (已修正 Qdrant 查询格式)
 import logging
 from typing import Optional
 import openai
 import ollama
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models  # <-- 【核心修正】导入 models
 from sentence_transformers import SentenceTransformer
 import config
 from typing import List
@@ -18,12 +19,10 @@ class QueryRouter:
         self.collections = config.AVAILABLE_COLLECTIONS
 
     def _get_query_vector(self, query: str) -> Optional[List[float]]:
-        """【新增】根据客户端类型，使用正确的方法生成向量"""
+        """根据客户端类型，使用正确的方法生成向量"""
         try:
-            # 检查对象是否有 .encode 方法 (适用于 SentenceTransformer)
             if hasattr(self.embedding_model, 'encode'):
                 return self.embedding_model.encode(query).tolist()
-            # 否则，假定它是 ollama.Client
             else:
                 response = self.embedding_model.embeddings(model=config.EMBEDDING_MODEL_NAME, prompt=query)
                 return response.get("embedding")
@@ -32,7 +31,6 @@ class QueryRouter:
             return None
 
     def _route_by_similarity(self, query: str) -> Optional[str]:
-        # 【修改】调用新的向量生成函数
         query_vector = self._get_query_vector(query)
         if not query_vector:
             return None
@@ -40,14 +38,19 @@ class QueryRouter:
         scores = {}
         for collection in self.collections:
             try:
+                # --- 【核心修正】将向量包装在 NamedVector 中 ---
                 search_results = self.qdrant_client.search(
-                    collection_name=collection, query_vector=query_vector, limit=3
+                    collection_name=collection,
+                    query_vector=models.NamedVector(name="dense", vector=query_vector),
+                    limit=3
                 )
                 if search_results:
                     avg_score = sum(hit.score for hit in search_results) / len(search_results)
                     scores[collection] = avg_score
                     logger.info(f"Similarity search in '{collection}' avg score: {avg_score:.4f}")
-            except Exception: continue
+            except Exception as e:
+                logger.error(f"Error during similarity search in '{collection}': {e}")
+                continue
         
         if not scores: return None
         

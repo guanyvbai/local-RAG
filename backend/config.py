@@ -1,7 +1,7 @@
-# 文件名: backend/config.py, 版本号: 2.5
+# /* 文件名: backend/config.py, 版本号: 2.7 */
 """
 项目配置文件。
-集中管理所有硬编码的常量和从环境变量加载的配置。
+【V2.7 更新】: 新增了对 SQL_INCLUDED_TABLES 环境变量的读取和解析。
 """
 import os
 from dotenv import load_dotenv
@@ -13,10 +13,7 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(ROOT_DIR, 'frontend')
 
 
-# --- 【核心新增】可用的工作流列表 ---
-# 在这里添加或修改，前端会自动更新
-# "value": 将被发送给 n8n Switch 节点的值
-# "name": 在前端下拉菜单中显示的名称
+# --- 可用的工作流列表 ---
 AVAILABLE_WORKFLOWS = [
     {"value": "rag_query", "name": "知识库问答"},
     {"value": "sql_query", "name": "数据库查询"},
@@ -34,8 +31,8 @@ QDRANT_COLLECTION_NAME = "general"
 MAX_QUERY_RETRY_LOOPS = 2
 ROUTING_CONFIDENCE_THRESHOLD = 0.82
 
-# --- 【核心新增】Reranker Model Settings ---
-RERANK_MODEL_NAME = "ms-marco-MiniLM-L-12-v2" # flashrank 使用的轻量级、高性能模型
+# --- Reranker Model Settings ---
+RERANK_MODEL_NAME = "ms-marco-MiniLM-L-12-v2"
 
 # --- Embedding Model Settings ---
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "ollama")
@@ -62,3 +59,9 @@ OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME")
 
 # --- Conversation Memory Settings ---
 CONVERSATION_HISTORY_K = 3
+
+# --- 【核心新增】Text-to-SQL Settings ---
+# 从 .env 读取以逗号分隔的表名字符串
+SQL_INCLUDED_TABLES_STR = os.getenv("SQL_INCLUDED_TABLES", "")
+# 解析成一个列表，并清除空白字符
+SQL_INCLUDED_TABLES = [table.strip() for table in SQL_INCLUDED_TABLES_STR.split(',') if table.strip()]

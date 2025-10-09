@@ -1,5 +1,4 @@
-# 文件名: backend/requirements.txt, 版本号: 2.5
-# Web Framework
+# /* 文件名: backend/requirements.txt, 版本号: 2.6 */
 # Web Framework
 fastapi
 uvicorn[standard]
@@ -34,6 +33,10 @@ bcrypt==3.2.0
 # --- 【核心新增】用于Rerank和BM25稀疏检索 ---
 rank-bm25
 flashrank
+
+# --- 【核心新增】用于 Text-to-SQL 功能 ---
+SQLAlchemy
+PyMySQL
 
 # 明确指定 PyTorch CPU 版本，避免下载庞大的CUDA库
 --extra-index-url https://download.pytorch.org/whl/cpu

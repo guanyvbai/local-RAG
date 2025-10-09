@@ -1,17 +1,19 @@
-# 文件名: backend/app.py, 版本号: 2.1
+# /* 文件名: backend/app.py, 版本号: 2.2 */
 """
 FastAPI 主应用程序文件。
-负责定义所有 API 路由、处理 HTTP 请求、与数据库交互，
-并作为整个后端服务的入口点。
+【V2.2 更新】:
+- 集成了 Text-to-SQL 功能。
+- 导入并初始化了 SQLQueryHandler。
+- 新增 /api/sql_query 路由，用于接收来自 n8n 的数据库问答请求。
 """
 
 # 1. 首先进行日志配置
 import logging
-import sys # <--- 导入 sys 模块
+import sys
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    stream=sys.stdout # <--- 强制输出到标准输出
+    stream=sys.stdout
 )
 # 2. 然后再导入其他所有模块
 import os
@@ -19,18 +21,20 @@ import io
 import sqlite3
 import re
 from fastapi import (
-    FastAPI, Depends, UploadFile, File, HTTPException, Request, Form, status
+    FastAPI, Depends, UploadFile, File, HTTPException, Request, Form, status, Response
 )
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from typing import List, Dict
 import time
-# 现在导入我们自己的模块
+
+# 导入我们自己的模块
 import config
 import auth
 import document_parser
 from rag_handler import rag_handler
+from sql_query_handler import SQLQueryHandler  # <-- 【核心新增】导入SQL处理器
 
 # --- 数据库设置 ---
 DATA_DIR = "/app/data"
@@ -39,9 +43,9 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
-# --- 数据库初始化与操作 ---
+# --- 数据库初始化与操作 (SQLite for users/chats) ---
 def init_db():
-    """初始化数据库"""
+    """初始化SQLite数据库"""
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, hashed_password TEXT)")
@@ -116,14 +120,20 @@ def rename_chat(chat_id: int, new_title: str, user_id: int):
         cursor.execute("UPDATE chats SET title = ? WHERE id = ? AND user_id = ?", (new_title, chat_id, user_id))
         conn.commit()
 
-
 # --- FastAPI 应用实例和启动事件 ---
-app = FastAPI(title="Intelligent RAG System")
+app = FastAPI(title="Intelligent RAG & SQL System")
+
+# --- 【核心新增】实例化 Text-to-SQL 处理器 ---
+try:
+    sql_handler = SQLQueryHandler()
+    logger.info("SQLQueryHandler 初始化成功。")
+except Exception as e:
+    sql_handler = None
+    logger.error(f"SQLQueryHandler 初始化失败: {e}", exc_info=True)
 
 @app.on_event("startup")
 def on_startup():
     init_db()
-
 
 # --- Pydantic 模型定义 ---
 class User(BaseModel):
@@ -137,6 +147,9 @@ class Token(BaseModel):
 class AskRequest(BaseModel):
     question: str
     chat_id: int
+    
+class SQLQueryRequest(BaseModel): # <-- 【核心新增】
+    question: str
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
@@ -144,7 +157,6 @@ class UserCreate(BaseModel):
 
 class RenameChatRequest(BaseModel):
     new_title: str
-
 
 # --- 认证依赖 ---
 async def get_current_active_user(token: str = Depends(auth.oauth2_scheme)) -> User:
@@ -156,8 +168,9 @@ async def get_current_active_user(token: str = Depends(auth.oauth2_scheme)) -> U
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return User(id=user_data['id'], username=user_data['username'])
 
-
 # --- API 路由 ---
+
+# --- 认证路由 ---
 @app.post("/api/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     user = get_user(form_data.username)
@@ -174,6 +187,7 @@ async def register(user: UserCreate):
         raise HTTPException(status_code=500, detail="Could not create user")
     return {"message": "User created successfully. Please log in."}
 
+# --- 知识库管理路由 ---
 @app.get("/api/collections", response_model=List[str])
 async def get_collections(current_user: User = Depends(get_current_active_user)):
     return rag_handler.list_collections()
@@ -222,6 +236,8 @@ async def upload_endpoint(file: UploadFile = File(...), collection_name: str = F
     except Exception as e:
         logger.error(f"Error processing file {file.filename}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- 聊天与工作流路由 ---
 @app.get("/api/workflows", response_model=List[Dict])
 async def get_workflows(current_user: User = Depends(get_current_active_user)):
     """返回在 config.py 中定义的可用工作流列表。"""
@@ -249,29 +265,12 @@ async def rename_chat_endpoint(chat_id: int, request: RenameChatRequest, current
     rename_chat(chat_id, request.new_title, current_user.id)
     return {"status": "success"}
 
-
 @app.post("/api/ask")
 async def ask(request: AskRequest, current_user: User = Depends(get_current_active_user)):
-    """
-    【V2.1 核心修改】
-    此接口现在调用 rag_handler.get_answer，该方法内部封装了
-    “查询改写 -> 检索 -> 评估 -> 循环/修正”的完整流程。
-    """
-    """
-    【V2.2 诊断版】
-    增加了详细的计时日志来排查性能问题。
-    """    
-    """
-    【V2.3 最终诊断版】
-    增加了强制的 print 语句来验证代码是否被执行。
-    """
-    # =================== 最终诊断语句 ===================
-    print("--- ASK ENDPOINT ENTERED ---", flush=True)
-    # =====================================================
-
-    start_time = time.time()  # <--- 开始计时
-    logger.info(f"[TIMING] Received request for chat_id: {request.chat_id}")
-
+    """处理 RAG 知识库问答请求"""
+    start_time = time.time()
+    logger.info(f"[TIMING] Received RAG request for chat_id: {request.chat_id}")
+    
     add_message_to_chat(request.chat_id, "user", request.question)
     
     messages = get_chat_messages(request.chat_id, current_user.id)
@@ -285,25 +284,42 @@ async def ask(request: AskRequest, current_user: User = Depends(get_current_acti
     def stream_generator():
         full_response = ""
         try:
-            # rag_handler.get_answer 现在是一个生成器函数，所以我们需要迭代它
             answer_generator = rag_handler.get_answer(request.question, history_for_prompt)
             for chunk in answer_generator:
                 full_response += chunk
                 yield chunk
             
-            # 当生成器结束时，记录总耗时
             end_time = time.time()
-            logger.info(f"[TIMING] Total request duration: {end_time - start_time:.2f} seconds")
+            logger.info(f"[TIMING] RAG request duration: {end_time - start_time:.2f} seconds")
             add_message_to_chat(request.chat_id, "assistant", full_response)
 
         except Exception as e:
-            logger.error(f"Error during answer generation: {e}", exc_info=True)
+            logger.error(f"Error during RAG answer generation: {e}", exc_info=True)
             end_time = time.time()
-            logger.info(f"[TIMING] Request failed after: {end_time - start_time:.2f} seconds")
+            logger.info(f"[TIMING] RAG request failed after: {end_time - start_time:.2f} seconds")
             yield "抱歉，回答时出现错误。"
     
     return StreamingResponse(stream_generator(), media_type="text/plain")
 
+# --- 【核心新增】Text-to-SQL API 端点 ---
+@app.post("/api/sql_query", response_class=Response)
+async def sql_query(request: SQLQueryRequest, current_user: User = Depends(get_current_active_user)):
+    """
+    接收自然语言问题，生成并返回SQL查询。此端点由 n8n 调用。
+    """
+    if not sql_handler:
+        raise HTTPException(status_code=500, detail="SQLQueryHandler 未成功初始化，无法处理请求。")
+    
+    logger.info(f"接收到 SQL 查询请求: '{request.question}'")
+    
+    # 1. 获取最新的数据库结构
+    db_schema = sql_handler.get_database_schema()
+    
+    # 2. 生成 SQL 查询
+    generated_sql = sql_handler.generate_sql_query(request.question, db_schema)
+    
+    # 3. 将生成的 SQL 作为纯文本返回给 n8n
+    return Response(content=generated_sql, media_type="text/plain")
 
 # --- 前端页面服务 ---
 @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
@@ -327,3 +343,7 @@ async def serve_frontend(request: Request, full_path: str):
 
     # 对于 SPA 应用，所有未匹配的路径都应返回 index.html
     index_path = os.path.join(base_dir, 'index.html')
+    if os.path.exists(index_path):
+        return HTMLResponse(open(index_path, 'r', encoding='utf-8').read())
+
+    raise HTTPException(status_code=404, detail="Not Found")
