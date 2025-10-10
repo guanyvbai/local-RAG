@@ -32,7 +32,8 @@
         .sidebar-footer a {display:block;padding:.75rem;background-color:var(--surface-color);border:1px solid var(--border-color);border-radius:4px;text-decoration:none;color:var(--primary-text-color);text-align:center;font-size:.9rem; width: 100%; box-sizing: border-box;}
         .sidebar-footer a:hover{background-color:#2a2b2c}
         .main-content{flex-grow:1;display:flex;justify-content:center}.container{width:100%;max-width:860px;display:flex;flex-direction:column;height:100%;padding:0 1rem;box-sizing:border-box}header{display:flex;justify-content:space-between;align-items:center;padding:1rem 0;flex-shrink:0}header h1{font-size:1.25rem;margin:0;font-weight:500}.header-right{display:flex;align-items:center;gap:1rem}#logout-button{background:var(--surface-color);border:1px solid var(--border-color);color:var(--primary-text-color);padding:.5rem 1rem;border-radius:99px;cursor:pointer}
-        .chat-window{flex-grow:1;overflow-y:auto;padding:1rem 0;display:flex;flex-direction:column}.chat-window::-webkit-scrollbar{width:8px}.chat-window::-webkit-scrollbar-track{background:transparent}.chat-window::-webkit-scrollbar-thumb{background:#444;border-radius:4px}.chat-window::-webkit-scrollbar-thumb:hover{background:#555}.chat-log{display:flex;flex-direction:column;gap:2rem;width:100%}.welcome-view{text-align:center;margin:auto}.welcome-view .gemini-logo{font-size:4rem;font-weight:700;background:-webkit-linear-gradient(45deg,#4285F4,#9B72CB,#D96570,#F2A600);-webkit-background-clip:text;-webkit-text-fill-color:transparent}.welcome-view h2{font-size:1.5rem;font-weight:500;color:#888}.message{display:flex;gap:1rem;width:100%;line-height:1.75}.avatar{width:32px;height:32px;border-radius:50%;background-color:var(--accent-color);color:var(--bg-color);display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;margin-top:2px}.assistant-message .avatar{background:-webkit-linear-gradient(45deg,#4285F4,#9B72CB)}.message-content{padding-top:4px;flex-grow:1}.message-content p{margin:0 0 1rem}.message-content ul,.message-content ol{padding-left:1.5rem}.message-content li{margin-bottom:.5rem}.message-content pre{background-color:#0d0d0d;border:1px solid var(--border-color);border-radius:8px;padding:1rem;overflow-x:auto;position:relative}.message-content code{font-family:'Fira Code','Courier New',monospace;font-size:.9em}.code-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;font-size:.8rem;color:var(--secondary-text-color)}.copy-btn{background:var(--surface-color);border:1px solid var(--border-color);color:var(--primary-text-color);padding:.25rem .5rem;border-radius:4px;cursor:pointer}.copy-btn:hover{background-color:#3c4043}.input-area-container{flex-shrink:0;padding:1rem 0 2rem}.input-area{display:flex;align-items:center;gap:1rem;background-color:var(--surface-color);border-radius:99px;padding:.5rem .5rem .5rem 1.5rem}#question-input{flex-grow:1;background:transparent;border:none;outline:none;color:var(--primary-text-color);font-size:1rem;line-height:1.5;resize:none;height:24px;max-height:200px}#send-button{width:40px;height:40px;border-radius:50%;border:none;background-color:var(--accent-color);color:var(--bg-color);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background-color .3s}#send-button:hover{background-color:#9ac2fa}#send-button.loading{background-color:#555;cursor:not-allowed;animation:spin 1s linear infinite}@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+        .chat-window{flex-grow:1;overflow-y:auto;padding:1rem 0;display:flex;flex-direction:column}.chat-window::-webkit-scrollbar{width:8px}.chat-window::-webkit-scrollbar-track{background:transparent}.chat-window::-webkit-scrollbar-thumb{background:#444;border-radius:4px}.chat-window::-webkit-scrollbar-thumb:hover{background:#555}.chat-log{display:flex;flex-direction:column;gap:2rem;width:100%}.welcome-view{text-align:center;margin:auto}.welcome-view .gemini-logo{font-size:4rem;font-weight:700;background:-webkit-linear-gradient(45deg,#4285F4,#9B72CB,#D96570,#F2A600);-webkit-background-clip:text;-webkit-text-fill-color:transparent}.welcome-view h2{font-size:1.5rem;font-weight:500;color:#888}.message{display:flex;gap:1rem;width:100%;line-height:1.75}.avatar{width:32px;height:32px;border-radius:50%;background-color:var(--accent-color);color:var(--bg-color);display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;margin-top:2px}.assistant-message .avatar{background:-webkit-linear-gradient(45deg,#4285F4,#9B72CB)}.message-content{padding-top:4px;flex-grow:1; max-width: calc(100% - 48px);}
+        .message-content p{margin:0 0 1rem}.message-content ul,.message-content ol{padding-left:1.5rem}.message-content li{margin-bottom:.5rem}.message-content pre{background-color:#0d0d0d;border:1px solid var(--border-color);border-radius:8px;padding:1rem;overflow-x:auto;position:relative}.message-content code{font-family:'Fira Code','Courier New',monospace;font-size:.9em}.code-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;font-size:.8rem;color:var(--secondary-text-color)}.copy-btn{background:var(--surface-color);border:1px solid var(--border-color);color:var(--primary-text-color);padding:.25rem .5rem;border-radius:4px;cursor:pointer}.copy-btn:hover{background-color:#3c4043}.input-area-container{flex-shrink:0;padding:1rem 0 2rem}.input-area{display:flex;align-items:center;gap:1rem;background-color:var(--surface-color);border-radius:99px;padding:.5rem .5rem .5rem 1.5rem}#question-input{flex-grow:1;background:transparent;border:none;outline:none;color:var(--primary-text-color);font-size:1rem;line-height:1.5;resize:none;height:24px;max-height:200px}#send-button{width:40px;height:40px;border-radius:50%;border:none;background-color:var(--accent-color);color:var(--bg-color);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background-color .3s}#send-button:hover{background-color:#9ac2fa}#send-button.loading{background-color:#555;cursor:not-allowed;animation:spin 1s linear infinite}@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
         .workflow-selector-container {
             display: flex;
             align-items: center;
@@ -49,6 +50,20 @@
             border-radius: 4px;
             padding: 0.25rem 0.5rem;
         }
+        .cve-table-container { border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; margin-top: 1rem; }
+        .cve-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        .cve-table th, .cve-table td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border-color); }
+        .cve-table th { background-color: #2c2d2f; font-weight: 500; }
+        .cve-table tbody tr:last-child td { border-bottom: none; }
+        .cve-table .cve-id-cell { color: var(--accent-color); font-weight: bold; white-space: nowrap; }
+        .description-cell-content { max-height: 80px; overflow-y: auto; padding-right: 10px; }
+        .description-cell-content::-webkit-scrollbar{ width: 4px; }
+        .description-cell-content::-webkit-scrollbar-thumb{ background: #555; }
+        .cve-severity { padding: 0.2rem 0.6rem; border-radius: 99px; font-size: 0.8rem; font-weight: 500; color: white; white-space: nowrap; }
+        .cve-severity.CRITICAL { background-color: #820303; }
+        .cve-severity.HIGH { background-color: #c53818; }
+        .cve-severity.MEDIUM { background-color: #d19a66; }
+        .cve-severity.LOW { background-color: #56b6c2; }
     </style>
 </head>
 <body>
@@ -82,8 +97,7 @@
           <footer class="input-area-container">
               <div class="workflow-selector-container">
                   <label for="workflow-selector">选择业务场景:</label>
-                  <select id="workflow-selector">
-                      </select>
+                  <select id="workflow-selector"></select>
               </div>
               <div class="input-area">
                   <textarea id="question-input" placeholder="请输入你的问题..." rows="1"></textarea>
@@ -115,10 +129,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function loadWorkflows() {
         try {
             const response = await fetch('/api/workflows', { headers });
-            if (!response.ok) {
-                if(response.status === 401) window.location.href = '/login.html';
-                throw new Error('Failed to load workflows');
-            }
+            if (!response.ok) { throw new Error('Failed to load workflows'); }
             const workflows = await response.json();
             workflowSelector.innerHTML = '';
             workflows.forEach(workflow => {
@@ -127,23 +138,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                 option.textContent = workflow.name;
                 workflowSelector.appendChild(option);
             });
-        } catch (e) {
-            console.error(e);
-            workflowSelector.innerHTML = '<option value="rag_query">知识库问答 (默认)</option>';
-        }
+        } catch (e) { console.error(e); }
     }
-
+    
     async function loadUserChats() {
         try {
             const response = await fetch('/api/chats', { headers });
             if(!response.ok) { if(response.status === 401) { window.location.href = '/login.html'; } throw new Error('Failed'); }
             const chats = await response.json();
             renderChatList(chats);
-            if (chats.length > 0 && !currentChatId) {
-                switchChat(chats[0].id);
-            } else if (chats.length === 0) {
-                startNewChat();
-            }
+            if (chats.length > 0 && !currentChatId) { switchChat(chats[0].id); } 
+            else if (chats.length === 0) { startNewChat(); }
         } catch(e) { console.error(e); }
     }
 
@@ -152,37 +157,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         chats.forEach(chat => {
             const li = document.createElement('li');
             li.dataset.chatId = chat.id;
-            const titleSpan = document.createElement('span');
-            titleSpan.className = 'chat-title';
-            titleSpan.textContent = chat.title;
-            li.appendChild(titleSpan);
-            const actionsDiv = document.createElement('div');
-            actionsDiv.className = 'chat-actions';
-            const renameBtn = document.createElement('button');
-            renameBtn.className = 'action-btn';
-            renameBtn.innerHTML = '✏️';
-            renameBtn.title = '重命名';
-            renameBtn.onclick = (e) => { e.stopPropagation(); toggleRename(li, chat.id, chat.title); };
-            actionsDiv.appendChild(renameBtn);
-            const deleteBtn = document.createElement('button');
-            deleteBtn.className = 'action-btn';
-            deleteBtn.innerHTML = '🗑️';
-            deleteBtn.title = '删除';
-            deleteBtn.onclick = (e) => { e.stopPropagation(); deleteChat(chat.id); };
-            actionsDiv.appendChild(deleteBtn);
-            li.appendChild(actionsDiv);
-            li.addEventListener('click', () => switchChat(chat.id));
-            if (chat.id === currentChatId) {
-                li.classList.add('active');
-            }
+            li.innerHTML = `<span class="chat-title">${chat.title}</span><div class="chat-actions"><button class="action-btn rename-btn" title="重命名">✏️</button><button class="action-btn delete-btn" title="删除">🗑️</button></div>`;
+            if (chat.id === currentChatId) li.classList.add('active');
             chatHistoryList.appendChild(li);
         });
     }
-    
+
+    chatHistoryList.addEventListener('click', (e) => {
+        const target = e.target;
+        const li = target.closest('li');
+        if (!li) return;
+        const chatId = parseInt(li.dataset.chatId);
+        if (target.classList.contains('rename-btn')) {
+            e.stopPropagation();
+            toggleRename(li, chatId, li.querySelector('.chat-title').textContent);
+        } else if (target.classList.contains('delete-btn')) {
+            e.stopPropagation();
+            deleteChat(chatId);
+        } else {
+            switchChat(chatId);
+        }
+    });
+
     function toggleRename(li, chatId, currentTitle) {
         const titleSpan = li.querySelector('.chat-title');
-        const existingInput = li.querySelector('.rename-input');
-        if (existingInput) return;
+        if (li.querySelector('.rename-input')) return;
         titleSpan.style.display = 'none';
         const input = document.createElement('input');
         input.type = 'text';
@@ -198,14 +197,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 });
                 titleSpan.textContent = newTitle;
             }
-            li.removeChild(input);
+            if(li.contains(input)) li.removeChild(input);
             titleSpan.style.display = 'block';
         };
         input.onblur = saveRename;
         input.onkeydown = (e) => {
             if (e.key === 'Enter') saveRename();
-            if (e.key === 'Escape') {
-                li.removeChild(input);
+            if (e.key === 'Escape') { 
+                if(li.contains(input)) li.removeChild(input);
                 titleSpan.style.display = 'block';
             }
         };
@@ -217,9 +216,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function deleteChat(chatId) {
         if (!confirm('确定要删除这段对话吗？此操作无法撤销。')) return;
         await fetch(`/api/chats/${chatId}`, { method: 'DELETE', headers });
-        if (currentChatId === chatId) {
-            currentChatId = null;
-        }
+        if (currentChatId === chatId) currentChatId = null;
         loadUserChats();
     }
 
@@ -230,15 +227,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         if(!response.ok){ if(response.status===401) window.location.href='/login.html'; return; }
         const messages = await response.json();
         chatLog.innerHTML='';
-        if (!document.body.contains(welcomeView)) {}
         if (messages.length === 0) {
-            chatLog.appendChild(welcomeView);
             welcomeView.style.display = 'block';
+            if(!chatLog.contains(welcomeView)) chatLog.appendChild(welcomeView);
         } else {
-            if (document.body.contains(welcomeView)) {
-                welcomeView.style.display = 'none';
-            }
-            messages.forEach(msg => addMessage(msg.role, msg.content));
+            welcomeView.style.display = 'none';
+            messages.forEach(msg => {
+                if (msg.role === 'assistant' && msg.content.startsWith('__VULN_PAYLOAD__')) {
+                    try {
+                        const payload = JSON.parse(msg.content.replace('__VULN_PAYLOAD__', ''));
+                        displayVulnerabilities(payload.cpe, payload.vulnerabilities, addMessage('assistant', ''));
+                    } catch (e) { addMessage('assistant', '无法解析历史漏洞数据。'); }
+                } else { addMessage(msg.role, msg.content); }
+            });
         }
         document.querySelectorAll('.chat-history-list li').forEach(li => {
             li.classList.toggle('active', parseInt(li.dataset.chatId) === chatId);
@@ -261,49 +262,74 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function handleSend() {
         const question = questionInput.value.trim();
-        const selectedWorkflow = workflowSelector.value;
         if (!question || !currentChatId) return;
-        setLoading(true);
+        await saveMessage('user', question);
         addMessage('user', question);
         questionInput.value = '';
         questionInput.style.height = 'auto';
-        const assistantMessageElem = addMessage('assistant', '▍');
+        setLoading(true);
+        await handleN8nWorkflow(question, workflowSelector.value);
+        setLoading(false);
+    }
 
+    async function handleN8nWorkflow(question, workflow) {
+        const assistantMessageElem = addMessage('assistant', '▍');
         try {
             const response = await fetch('http://localhost:5678/webhook/ask', {
                 method: 'POST',
-                headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    question, 
-                    chat_id: currentChatId,
-                    workflow: selectedWorkflow
-                })
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question, chat_id: currentChatId, workflow, token: token })
             });
+            if (!response.ok) { throw new Error(`HTTP error! Status: ${response.status}`); }
 
-            if (!response.ok) { if (response.status === 401) window.location.href = '/login.html'; throw new Error(`HTTP error!`); }
+            // ✅ 智能检测漏洞JSON数据
+            const responseText = await response.text();
+            try {
+                const parsed = JSON.parse(responseText);
+                if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].cve_id) {
+                    displayVulnerabilities(question, parsed, assistantMessageElem);
+                    await saveMessage('assistant', `__VULN_PAYLOAD__${JSON.stringify({cpe: question, vulnerabilities: parsed})}`);
+                    return;
+                }
+            } catch (e) {
+                console.warn("响应不是标准JSON数组，进入普通渲染");
+            }
 
-            const reader = response.body.getReader();
+            // ✅ 否则走流式渲染
+            const reader = new ReadableStream({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode(responseText));
+                    controller.close();
+                }
+            }).getReader();
             const decoder = new TextDecoder();
             let fullResponse = "";
-            let isFirstChunk = true;
+            assistantMessageElem.innerHTML = "";
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
-                if (isFirstChunk) { assistantMessageElem.innerHTML = ""; isFirstChunk = false; }
                 fullResponse += decoder.decode(value, { stream: true });
                 assistantMessageElem.innerHTML = marked.parse(fullResponse + "▍");
             }
             assistantMessageElem.innerHTML = marked.parse(fullResponse);
             assistantMessageElem.querySelectorAll("pre code").forEach(addCodeBlockFeatures);
+            await saveMessage('assistant', fullResponse);
+
         } catch (error) {
-            assistantMessageElem.innerHTML = `<p style="color:red;">抱歉，回答时出现错误。</p>`;
-        } finally {
-            setLoading(false);
+            assistantMessageElem.innerHTML = `<p style="color:red;">抱歉，回答时出现错误: ${error.message}</p>`;
         }
     }
-    
+
+    async function saveMessage(role, content) {
+        await fetch(`/api/chats/${currentChatId}/messages`, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ role, content })
+        });
+    }
+
     function addMessage(sender, text) {
-        if(welcomeView && sender === 'user') welcomeView.style.display = "none";
+        if(sender === 'user' && chatLog.contains(welcomeView)) welcomeView.style.display = "none";
         const messageElem = document.createElement("div");
         messageElem.classList.add("message", `${sender}-message`);
         const avatar = document.createElement("div");
@@ -312,13 +338,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         messageContent.classList.add("message-content");
         if (sender === "user") {
             avatar.textContent = "U";
-            const p = document.createElement("p");
-            p.textContent = text;
-            messageContent.appendChild(p);
+            messageContent.textContent = text;
         } else {
-            avatar.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="20px" height="20px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-2h2v2zm2-4h-2V7h2z"/></svg>';
-            messageContent.innerHTML = marked.parse(text);
-            messageContent.querySelectorAll("pre code").forEach(addCodeBlockFeatures);
+            avatar.textContent = "G";
+            if (text) {
+                 messageContent.innerHTML = marked.parse(text);
+                 messageContent.querySelectorAll("pre code").forEach(addCodeBlockFeatures);
+            }
         }
         messageElem.appendChild(avatar);
         messageElem.appendChild(messageContent);
@@ -327,51 +353,69 @@ document.addEventListener('DOMContentLoaded', async () => {
         return messageContent;
     }
 
+    function displayVulnerabilities(cpe, vulnerabilities, element) {
+        if (!vulnerabilities || !Array.isArray(vulnerabilities) || vulnerabilities.length === 0) {
+            element.innerHTML = `<p>未找到与 CPE "${cpe}" 相关的漏洞信息，或返回的数据格式不正确。</p>`;
+            return;
+        }
+        let html = `<p>为 <strong>${cpe}</strong> 找到了 ${vulnerabilities.length} 条相关漏洞：</p>`;
+        html += '<div class="cve-table-container">';
+        html += '<table class="cve-table">';
+        html += `<thead><tr><th>CVE ID</th><th>Severity</th><th>CVSS Score</th><th>Description</th></tr></thead>`;
+        html += '<tbody>';
+        vulnerabilities.forEach(vuln => {
+            const severity = (vuln.severity || 'UNKNOWN').toUpperCase();
+            html += `
+                <tr>
+                    <td class="cve-id-cell">${vuln.cve_id || 'N/A'}</td>
+                    <td><span class="cve-severity ${severity}">${severity}</span></td>
+                    <td>${vuln.base_score || 'N/A'}</td>
+                    <td><div class="description-cell-content">${vuln.description || 'No description available.'}</div></td>
+                </tr>`;
+        });
+        html += '</tbody></table></div>';
+        element.innerHTML = html;
+        chatLog.parentElement.scrollTop = chatLog.parentElement.scrollHeight;
+    }
+
     function addCodeBlockFeatures(block) {
         const pre = block.parentElement;
-        const langMatch = block.className.match(/language-(\S+)/);
-        const lang = langMatch ? langMatch[1] : "text";
-        const header = document.createElement("div");
-        header.className = "code-header";
-        const langName = document.createElement("span");
-        langName.textContent = lang;
-        const copyBtn = document.createElement("button");
-        copyBtn.className = "copy-btn";
-        copyBtn.textContent = "复制";
-        copyBtn.addEventListener("click", () => {
+        if(pre.querySelector('.code-header')) return;
+        const header = document.createElement('div');
+        header.className = 'code-header';
+        const lang = [...block.classList].find(c => c.startsWith('language-'))?.replace('language-', '') || 'text';
+        header.innerHTML = `<span>${lang}</span><button class="copy-btn">复制</button>`;
+        pre.insertBefore(header, block);
+        header.querySelector('.copy-btn').addEventListener('click', () => {
             navigator.clipboard.writeText(block.textContent).then(() => {
-                copyBtn.textContent = "已复制!";
-                setTimeout(() => copyBtn.textContent = "复制", 2000);
+                header.querySelector('.copy-btn').textContent = '已复制!';
+                setTimeout(() => { header.querySelector('.copy-btn').textContent = '复制'; }, 2000);
             });
         });
-        header.appendChild(langName);
-        header.appendChild(copyBtn);
-        pre.insertBefore(header, block);
-        hljs.highlightElement(block);
+        if (window.hljs) {
+            hljs.highlightElement(block);
+        }
     }
 
     function setLoading(isLoading) {
-        sendButton.disabled = isLoading;
-        questionInput.disabled = isLoading;
-        if (isLoading) {
-            sendButton.classList.add("loading");
-            sendButton.innerHTML = "";
+        const btn = sendButton;
+        if(isLoading){
+            btn.classList.add('loading');
+            btn.disabled = true;
+            btn.innerHTML = '<div></div>';
         } else {
-            sendButton.classList.remove("loading");
-            sendButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="#131314"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2 .01 7z"/></svg>';
+            btn.classList.remove('loading');
+            btn.disabled = false;
+            btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="#131314"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2 .01 7z"/></svg>`;
         }
     }
     
     sendButton.addEventListener('click', handleSend);
     questionInput.addEventListener('keypress', e => {
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
     });
 
-    // 页面加载时，先加载工作流，再加载聊天记录
-    await loadWorkflows();
+    loadWorkflows();
     loadUserChats();
 });
 </script>
