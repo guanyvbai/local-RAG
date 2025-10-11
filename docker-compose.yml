@@ -1,5 +1,5 @@
-# docker-compose.yml (已根据 .env 文件进行优化)
-# version: '3.8'
+# docker-compose.yml (V1.3 - 离线简化版)
+
 
 services:
   backend:
@@ -12,9 +12,9 @@ services:
       - "8000:8000"
     volumes:
       - ./app_data:/app/data
+      - ./models/reranker:/app/models/reranker
     env_file:
       - .env
-    environment: {}
     networks:
       - rag_network
     restart: always
@@ -35,18 +35,6 @@ services:
       - rag_network
     restart: always
 
-  ollama-setup:
-    image: ollama/ollama
-    container_name: rag_ollama_setup
-    entrypoint: /bin/sh
-    command: -c "ollama serve & sleep 10 && ollama pull $$LLM_MODEL && ollama pull $$EMBEDDING_MODEL && kill $$(ps | grep 'ollama' | awk '{print $$1}')"
-    env_file:
-      - .env
-    volumes:
-      - ollama_data:/root/.ollama
-    networks:
-      - rag_network
-    
   ollama:
     image: ollama/ollama
     container_name: rag_ollama
@@ -58,9 +46,6 @@ services:
       - ollama_data:/root/.ollama
     networks:
       - rag_network
-    depends_on:
-      ollama-setup:
-        condition: service_completed_successfully
     restart: always
     healthcheck:
       test: ["CMD", "ollama", "ps"]
@@ -77,7 +62,6 @@ services:
     depends_on:
       - mysql
       - backend
-      - mysql_mcp
     ports:
       - "5678:5678"
     volumes:
@@ -85,7 +69,6 @@ services:
       - n8n_data:/home/node/.n8n
     networks:
       - rag_network
-
 
   mysql:
     image: mysql:8.0
@@ -100,25 +83,11 @@ services:
     networks:
       - rag_network
 
-  # === 新增 MCP 服务 ===
-  mysql_mcp:
-    image: local-rag-0825-mysql_mcp 
-    build: ./mysql_mcp          # MCP 源码目录（包含 Dockerfile）
-    container_name: mysql_mcp_service
-    restart: always
-    ports:
-      - "3101:3101"       # MCP SSE/HTTP 服务端口
-    networks:
-      - rag_network
-    env_file:
-      - .env              # 如果 MCP 里需要数据库连接等配置
-
 networks:
   rag_network:
     driver: bridge
 
 volumes:
-  app_data:
   qdrant_storage:
   ollama_data:
   n8n_data:

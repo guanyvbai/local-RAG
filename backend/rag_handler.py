@@ -1,28 +1,20 @@
-# s
-"""
-RAG (Retrieval-Augmented Generation) 核心处理器。
-【V4.2 持久化修复版】:
-- 重写了集合检查逻辑 `_ensure_collection_exists`，确保服务重启不会删除现有数据。
-- 将破坏性的 `recreate_collection` 修改为安全的 `create_collection`，只在集合不存在时创建。
-"""
+# /* 文件名: backend/rag_handler.py, 版本号: 5.1 (离线简化版) */
 import ollama
-import openai
 from qdrant_client import QdrantClient, models
-from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Union, Generator, Any
 
 import logging
 import time
 import os
-import pickle 
+import pickle
 
 from rank_bm25 import BM25Okapi
 from flashrank import Ranker, RerankRequest
-
+import shutil
 import config
 from router import QueryRouter
 from document_parser import ParsedElement
-from chunker import create_multi_vector_chunks, ParentChunk, ChildChunk
+from chunker import create_multi_vector_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -33,22 +25,66 @@ class RAGHandler:
     def __init__(self):
         self.qdrant_client = QdrantClient(url=config.QDRANT_URL)
         
-        if config.EMBEDDING_PROVIDER == "ollama":
-            self.embedding_client = ollama.Client(host=config.OLLAMA_BASE_URL)
-            logger.info(f"Embedding provider set to: Ollama (model: {config.EMBEDDING_MODEL_NAME})")
-            self.embedding_dim = self._get_ollama_embedding_dimension()
-        else: # huggingface
-            self.embedding_client = SentenceTransformer(config.EMBEDDING_MODEL_NAME, cache_folder="/app/data/sentence_transformer_models")
-            logger.info(f"Embedding provider set to: Hugging Face (model: {config.EMBEDDING_MODEL_NAME})")
-            self.embedding_dim = self.embedding_client.get_sentence_embedding_dimension()
+        # --- 简化嵌入逻辑，仅使用Ollama ---
+        self.embedding_client = ollama.Client(host=config.OLLAMA_BASE_URL)
+        logger.info(f"使用Ollama嵌入模型: {config.EMBEDDING_MODEL_NAME}")
+        self.embedding_dim = self._get_ollama_embedding_dimension()
 
-        if config.LLM_PROVIDER == 'openai':
-            self.llm_client = openai.OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL)
-        else:
-            self.llm_client = ollama.Client(host=config.OLLAMA_BASE_URL)
+        self.llm_client = ollama.Client(host=config.OLLAMA_BASE_URL)
         
-        self.reranker = Ranker(model_name=config.RERANK_MODEL_NAME, cache_dir="/app/data/reranker_models")
-        logger.info(f"Reranker initialized with model: {config.RERANK_MODEL_NAME}")
+
+# --- 【Reranker 加载逻辑：离线兼容模式】 ---
+        model_path = config.RERANK_MODEL_PATH
+        logger.info(f"准备从本地路径加载 Reranker 模型: {model_path}")
+
+        if not os.path.isdir(model_path):
+            logger.error(f"‼️ 致命错误: 路径 '{model_path}' 不存在或不是一个目录！")
+            raise RuntimeError(f"Reranker 模型路径无效: {model_path}")
+
+        logger.info(f"✅ 路径 '{model_path}' 存在并且是一个目录。")
+        try:
+            files_in_dir = os.listdir(model_path)
+            logger.info(f"   目录下的文件列表: {files_in_dir}")
+            if not files_in_dir:
+                logger.error("   ‼️ 错误: Reranker 模型目录为空！请检查模型文件。")
+        except Exception as e:
+            logger.error(f"   ‼️ 错误: 无法读取目录 '{model_path}' 内容: {e}")
+
+        try:
+            # --- 递归查找 onnx 文件 ---
+            onnx_model_path = None
+            for root, dirs, files in os.walk(model_path):
+                for f in files:
+                    if f.endswith(".onnx"):
+                        onnx_model_path = os.path.join(root, f)
+                        break
+                if onnx_model_path:
+                    break
+
+            if not onnx_model_path:
+                raise FileNotFoundError(f"在 {model_path} 中未找到 .onnx 模型文件！")
+
+            logger.info(f"✅ 在递归搜索中找到 FlashRank ONNX 模型文件: {onnx_model_path}")
+
+            # --- 构建 FlashRank 本地缓存路径 ---
+            cache_dir = os.path.expanduser("~/.cache/flashrank/models/ms-marco-MiniLM-L-12-v2")
+            os.makedirs(os.path.dirname(cache_dir), exist_ok=True)
+
+            # --- 强制复制到缓存目录 ---
+            logger.info(f"⚙️ 将本地模型同步到 FlashRank 缓存目录: {cache_dir}")
+            shutil.copytree(model_path, cache_dir, dirs_exist_ok=True)
+
+            # --- 设置环境变量，强制离线模式 ---
+            os.environ["FLASHRANK_OFFLINE"] = "1"
+            os.environ["FLASHRANK_CACHE_DIR"] = os.path.expanduser("~/.cache/flashrank")
+
+            # --- 初始化 Reranker ---
+            self.reranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2")
+            logger.info("✅ 成功从本地缓存加载 FlashRank reranker 模型（离线模式启用）。")
+
+        except Exception as e:
+            logger.exception(f"‼️ Reranker 模型加载失败: {e}")
+            raise RuntimeError("Reranker 初始化失败")
 
         self.query_router = QueryRouter(
             qdrant_client=self.qdrant_client,
@@ -57,11 +93,9 @@ class RAGHandler:
         )
         
         self.bm25_models_cache = {}
-
-        # --- 【核心修改】在启动时调用新的、安全的检查方法 ---
         for collection_name in config.AVAILABLE_COLLECTIONS:
             self._ensure_collection_exists(collection_name)
-
+    
     def _get_bm25_model_path(self, collection_name: str) -> str:
         return os.path.join(BM25_MODELS_DIR, f"{collection_name}_bm25.pkl")
 
@@ -109,42 +143,30 @@ class RAGHandler:
         except Exception as e:
             logger.error(f"Failed to rebuild BM25 model for '{collection_name}': {e}", exc_info=True)
 
-    # --- 【核心修改】重写集合检查与创建逻辑 ---
     def _ensure_collection_exists(self, collection_name: str):
-        """
-        检查集合是否存在，如果不存在，则创建它。这是一个非破坏性操作。
-        """
         try:
             self.qdrant_client.get_collection(collection_name=collection_name)
             logger.info(f"集合 '{collection_name}' 已存在，将直接使用。")
         except Exception as e:
-            # 捕获因集合不存在而引发的异常 (通常是状态码404)
             if "not found" in str(e).lower() or "status_code=404" in str(e):
                 logger.warning(f"集合 '{collection_name}' 不存在，现在开始创建...")
                 self.create_collection(collection_name)
             else:
-                # 对于其他未知错误，则打印出来
                 logger.error(f"检查集合 '{collection_name}' 时发生未知错误: {e}", exc_info=True)
 
     def create_collection(self, collection_name: str) -> bool:
-        """
-        安全地创建新集合。如果已存在，则不会执行任何操作。
-        """
         try:
-            # 使用 create_collection 而不是 recreate_collection
             self.qdrant_client.create_collection(
                 collection_name=collection_name,
                 vectors_config={"dense": models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)},
                 sparse_vectors_config={"bm25": models.SparseVectorParams(index=models.SparseIndexParams(on_disk=False))}
             )
             logger.info(f"成功创建混合检索集合: {collection_name}")
-            # 新建集合后，清理可能存在的旧BM25模型文件
             model_path = self._get_bm25_model_path(collection_name)
             if os.path.exists(model_path):
                 os.remove(model_path)
             return True
         except Exception as e:
-            # 如果集合已经存在，qdrant_client 会抛出异常，这是预期行为
             if "already exists" in str(e).lower():
                 logger.info(f"集合 '{collection_name}' 已存在，无需重复创建。")
                 return True
@@ -152,30 +174,16 @@ class RAGHandler:
             return False
 
     def get_answer(self, query: str, chat_history: List[Dict[str, str]]) -> Generator[str, None, None]:
-        overall_start_time = time.time()
-        logger.info("[TIMING] --- Starting ADVANCED get_answer flow ---")
-        retrieval_start_time = time.time()
         initial_candidates = self.hybrid_retrieve(query, top_k=20)
-        retrieval_end_time = time.time()
-        logger.info(f"[TIMING] Initial retrieval finished. Duration: {retrieval_end_time - retrieval_start_time:.2f}s. Candidates found: {len(initial_candidates)}")
         if not initial_candidates:
             logger.warning("No candidates found after initial retrieval. Generating answer without context.")
             yield from self.generate_answer(query, [], chat_history)
             return
-        rerank_start_time = time.time()
         rerank_request = RerankRequest(query=query, passages=initial_candidates)
         reranked_results = self.reranker.rerank(rerank_request)
         final_context_payloads = reranked_results[:5]
-        rerank_end_time = time.time()
-        logger.info(f"[TIMING] Reranking finished. Duration: {rerank_end_time - rerank_start_time:.2f}s. Top 5 results selected.")
         final_context = [item['meta']['parent_content'] for item in final_context_payloads]
-        gen_start_time = time.time()
-        logger.info("[TIMING] Starting final answer generation with reranked context.")
         yield from self.generate_answer(query, final_context, chat_history)
-        gen_end_time = time.time()
-        logger.info(f"[TIMING] Final answer generation finished. Duration: {gen_end_time - gen_start_time:.2f}s.")
-        overall_end_time = time.time()
-        logger.info(f"[TIMING] --- Finished ADVANCED get_answer flow. Total duration: {overall_end_time - overall_start_time:.2f}s ---")
 
     def hybrid_retrieve(self, query: str, top_k: int = 20) -> List[Dict[str, Any]]:
         routed_collection = self.query_router.route_query(query)
@@ -226,26 +234,20 @@ class RAGHandler:
         for parent_chunk, child_chunks in multi_vector_chunks:
             parent_payload = parent_chunk.to_qdrant_payload()
             parent_payload["collection"] = collection_name
-            
             for child_chunk in child_chunks:
                 dense_vector = self._generate_embeddings(child_chunk.content)
                 if dense_vector:
                     child_payload = parent_payload.copy()
                     child_payload["child_content"] = child_chunk.content
                     child_payload["content_type"] = child_chunk.content_type
-                    
                     points_to_upsert.append(models.PointStruct(
                         id=child_chunk.chunk_id,
                         vector={"dense": dense_vector}, 
                         payload=child_payload
                     ))
-        
         if points_to_upsert:
             self.qdrant_client.upsert(collection_name=collection_name, points=points_to_upsert, wait=True)
-            logger.info(f"Successfully upserted {len(points_to_upsert)} child vectors for '{filename}'.")
             self._rebuild_bm25_model_for_collection(collection_name)
-        else:
-            logger.warning(f"No points were generated for file '{filename}'.")
     
     def _get_bm25_vector_for_query(self, bm25_model: BM25Okapi, query_keywords: List[str]) -> models.SparseVector:
         if not hasattr(bm25_model, 'word_to_id'):
@@ -257,11 +259,9 @@ class RAGHandler:
     def delete_collection(self, collection_name: str) -> bool:
         try:
             self.qdrant_client.delete_collection(collection_name=collection_name)
-            logger.info(f"成功删除集合: {collection_name}")
             model_path = self._get_bm25_model_path(collection_name)
             if os.path.exists(model_path):
                 os.remove(model_path)
-                logger.info(f"Successfully deleted BM25 model for collection '{collection_name}'.")
             return True
         except Exception as e:
             logger.error(f"删除集合失败 {collection_name}: {e}")
@@ -276,19 +276,14 @@ class RAGHandler:
                 ])),
                 wait=True
             )
-            logger.info(f"Successfully deleted vectors for document '{filename}'.")
             self._rebuild_bm25_model_for_collection(collection_name)
             return True
         except Exception as e:
-            logger.error(f"Failed to delete document '{filename}': {e}", exc_info=True)
             return False
     
     def generate_answer(self, query: str, context: List[str], chat_history: List[Dict[str, str]]):
         prompt = self._build_prompt(query, context, chat_history)
-        if config.LLM_PROVIDER.lower() == 'openai':
-            yield from self._generate_openai(prompt)
-        else:
-            yield from self._generate_ollama(prompt)
+        yield from self._generate_ollama(prompt)
 
     def _build_prompt(self, query: str, context: List[str], chat_history: List[Dict[str, str]]) -> List[Dict[str, str]]:
         context_str = "\n---\n".join(context) if context else "无"
@@ -308,13 +303,6 @@ class RAGHandler:
             messages.append({"role": "system", "content": f"[历史对话参考]\n{history_str}"})
         messages.append({"role": "user", "content": query})
         return messages
-
-    def _generate_openai(self, messages: List[Dict[str, str]]):
-        stream = self.llm_client.chat.completions.create(model=config.OPENAI_MODEL_NAME, messages=messages, stream=True)
-        for chunk in stream:
-            content = chunk.choices[0].delta.content
-            if content:
-                yield content
 
     def _generate_ollama(self, messages: List[Dict[str, str]]):
         stream = self.llm_client.chat(model=config.OLLAMA_MODEL_NAME, messages=messages, stream=True)
@@ -338,11 +326,8 @@ class RAGHandler:
     def _generate_embeddings(self, text: Union[str, object]) -> List[float]:
         text_str = str(text)
         try:
-            if config.EMBEDDING_PROVIDER == "ollama":
-                response = self.embedding_client.embeddings(model=config.EMBEDDING_MODEL_NAME, prompt=text_str)
-                return response["embedding"]
-            else:
-                return self.embedding_client.encode(text_str, normalize_embeddings=False).tolist()
+            response = self.embedding_client.embeddings(model=config.EMBEDDING_MODEL_NAME, prompt=text_str)
+            return response["embedding"]
         except Exception as e:
             logger.error(f"为文本生成嵌入时出错: '{text_str[:50]}...' - {e}")
             return []
