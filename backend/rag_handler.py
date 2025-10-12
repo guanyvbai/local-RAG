@@ -1,15 +1,14 @@
-# /* 文件名: backend/rag_handler.py, 版本号: 5.1 (离线简化版) */
+# /* 文件名: backend/rag_handler.py, 版本号: 6.0 (SentenceTransformer 替换版) */
 import ollama
 from qdrant_client import QdrantClient, models
 from typing import List, Dict, Union, Generator, Any
-
 import logging
 import time
 import os
 import pickle
-
 from rank_bm25 import BM25Okapi
-from flashrank import Ranker, RerankRequest
+# --- 【核心替换】导入 CrossEncoder ---
+from sentence_transformers import CrossEncoder
 import shutil
 import config
 from router import QueryRouter
@@ -22,88 +21,28 @@ BM25_MODELS_DIR = "/app/data/bm25_models"
 os.makedirs(BM25_MODELS_DIR, exist_ok=True)
 
 
-os.environ["FLASHRANK_OFFLINE"] = "1"
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["NO_PROXY"] = "*"
-os.environ["HTTP_PROXY"] = ""
-os.environ["HTTPS_PROXY"] = ""
-
-# 避免 FlashRank 误触发下载逻辑（伪装本地缓存）
-flashrank_cache_dir = "/root/.cache/flashrank/models/ms-marco-MiniLM-L-12-v2"
-local_model_dir = "/app/models/reranker"
-
-if os.path.exists(local_model_dir) and not os.path.exists(flashrank_cache_dir):
-    print(f"⚙️ 同步本地 reranker 模型到 FlashRank 缓存目录: {flashrank_cache_dir}")
-    shutil.copytree(local_model_dir, flashrank_cache_dir, dirs_exist_ok=True)
-
-# 如果缓存中有 onnx 文件，说明可以离线加载
-onnx_path = os.path.join(flashrank_cache_dir, "onnx")
-if os.path.exists(onnx_path):
-    print(f"✅ 检测到离线 FlashRank 模型缓存，禁用联网下载。")
-    os.environ["FLASHRANK_FORCE_LOCAL"] = "1"
-
 class RAGHandler:
     def __init__(self):
         self.qdrant_client = QdrantClient(url=config.QDRANT_URL)
         
-        # --- 简化嵌入逻辑，仅使用Ollama ---
         self.embedding_client = ollama.Client(host=config.OLLAMA_BASE_URL)
         logger.info(f"使用Ollama嵌入模型: {config.EMBEDDING_MODEL_NAME}")
         self.embedding_dim = self._get_ollama_embedding_dimension()
 
         self.llm_client = ollama.Client(host=config.OLLAMA_BASE_URL)
         
-
-# --- 【Reranker 加载逻辑：离线兼容模式】 ---
-        model_path = config.RERANK_MODEL_PATH
-        logger.info(f"准备从本地路径加载 Reranker 模型: {model_path}")
+        # --- 【核心替换】加载 sentence-transformers CrossEncoder 模型 ---
+        model_path = "/app/models/cross-encoder" # 对应 docker-compose.yml 的挂载路径
+        logger.info(f"准备从本地路径加载 CrossEncoder Reranker 模型: {model_path}")
 
         if not os.path.isdir(model_path):
-            logger.error(f"‼️ 致命错误: 路径 '{model_path}' 不存在或不是一个目录！")
+            logger.error(f"‼️ 致命错误: Reranker 模型路径 '{model_path}' 不存在或不是一个目录！")
             raise RuntimeError(f"Reranker 模型路径无效: {model_path}")
 
-        logger.info(f"✅ 路径 '{model_path}' 存在并且是一个目录。")
         try:
-            files_in_dir = os.listdir(model_path)
-            logger.info(f"   目录下的文件列表: {files_in_dir}")
-            if not files_in_dir:
-                logger.error("   ‼️ 错误: Reranker 模型目录为空！请检查模型文件。")
-        except Exception as e:
-            logger.error(f"   ‼️ 错误: 无法读取目录 '{model_path}' 内容: {e}")
-
-        try:
-            # --- 递归查找 onnx 文件 ---
-            onnx_model_path = None
-            for root, dirs, files in os.walk(model_path):
-                for f in files:
-                    if f.endswith(".onnx"):
-                        onnx_model_path = os.path.join(root, f)
-                        break
-                if onnx_model_path:
-                    break
-
-            if not onnx_model_path:
-                raise FileNotFoundError(f"在 {model_path} 中未找到 .onnx 模型文件！")
-
-            logger.info(f"✅ 在递归搜索中找到 FlashRank ONNX 模型文件: {onnx_model_path}")
-
-            # --- 构建 FlashRank 本地缓存路径 ---
-            cache_dir = os.path.expanduser("~/.cache/flashrank/models/ms-marco-MiniLM-L-12-v2")
-            os.makedirs(os.path.dirname(cache_dir), exist_ok=True)
-
-            # --- 强制复制到缓存目录 ---
-            logger.info(f"⚙️ 将本地模型同步到 FlashRank 缓存目录: {cache_dir}")
-            shutil.copytree(model_path, cache_dir, dirs_exist_ok=True)
-
-            # --- 设置环境变量，强制离线模式 ---
-            os.environ["FLASHRANK_OFFLINE"] = "1"
-            os.environ["FLASHRANK_CACHE_DIR"] = os.path.expanduser("~/.cache/flashrank")
-
-            # --- 初始化 Reranker ---
-            self.reranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2")
-            logger.info("✅ 成功从本地缓存加载 FlashRank reranker 模型（离线模式启用）。")
-
+            # 直接从本地文件夹路径加载模型
+            self.reranker = CrossEncoder(model_path)
+            logger.info("✅ 成功从本地路径加载 CrossEncoder reranker 模型。")
         except Exception as e:
             logger.exception(f"‼️ Reranker 模型加载失败: {e}")
             raise RuntimeError("Reranker 初始化失败")
@@ -118,6 +57,32 @@ class RAGHandler:
         for collection_name in config.AVAILABLE_COLLECTIONS:
             self._ensure_collection_exists(collection_name)
     
+    def get_answer(self, query: str, chat_history: List[Dict[str, str]]) -> Generator[str, None, None]:
+        initial_candidates = self.hybrid_retrieve(query, top_k=20)
+        if not initial_candidates:
+            logger.warning("No candidates found after initial retrieval. Generating answer without context.")
+            yield from self.generate_answer(query, [], chat_history)
+            return
+
+        # --- 【核心替换】使用 CrossEncoder 进行 Rerank ---
+        passages = [item['text'] for item in initial_candidates]
+        sentence_pairs = [[query, passage] for passage in passages]
+        
+        # 预测得分
+        scores = self.reranker.predict(sentence_pairs)
+        
+        # 组合 passage 和 score
+        reranked_results = [{"passage": passage, "score": score, "original_doc": initial_candidates[i]} for i, (passage, score) in enumerate(zip(passages, scores))]
+        
+        # 按分数降序排序
+        reranked_results.sort(key=lambda x: x['score'], reverse=True)
+        
+        # 提取前5个结果的 payload
+        final_context_payloads = [item['original_doc']['meta'] for item in reranked_results[:5]]
+        final_context = [payload.get('parent_content', '') for payload in final_context_payloads]
+
+        yield from self.generate_answer(query, final_context, chat_history)
+
     def _get_bm25_model_path(self, collection_name: str) -> str:
         return os.path.join(BM25_MODELS_DIR, f"{collection_name}_bm25.pkl")
 
@@ -194,18 +159,6 @@ class RAGHandler:
                 return True
             logger.error(f"创建集合失败 {collection_name}: {e}", exc_info=True)
             return False
-
-    def get_answer(self, query: str, chat_history: List[Dict[str, str]]) -> Generator[str, None, None]:
-        initial_candidates = self.hybrid_retrieve(query, top_k=20)
-        if not initial_candidates:
-            logger.warning("No candidates found after initial retrieval. Generating answer without context.")
-            yield from self.generate_answer(query, [], chat_history)
-            return
-        rerank_request = RerankRequest(query=query, passages=initial_candidates)
-        reranked_results = self.reranker.rerank(rerank_request)
-        final_context_payloads = reranked_results[:5]
-        final_context = [item['meta']['parent_content'] for item in final_context_payloads]
-        yield from self.generate_answer(query, final_context, chat_history)
 
     def hybrid_retrieve(self, query: str, top_k: int = 20) -> List[Dict[str, Any]]:
         routed_collection = self.query_router.route_query(query)
