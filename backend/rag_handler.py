@@ -21,6 +21,28 @@ logger = logging.getLogger(__name__)
 BM25_MODELS_DIR = "/app/data/bm25_models"
 os.makedirs(BM25_MODELS_DIR, exist_ok=True)
 
+
+os.environ["FLASHRANK_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["NO_PROXY"] = "*"
+os.environ["HTTP_PROXY"] = ""
+os.environ["HTTPS_PROXY"] = ""
+
+# 避免 FlashRank 误触发下载逻辑（伪装本地缓存）
+flashrank_cache_dir = "/root/.cache/flashrank/models/ms-marco-MiniLM-L-12-v2"
+local_model_dir = "/app/models/reranker"
+
+if os.path.exists(local_model_dir) and not os.path.exists(flashrank_cache_dir):
+    print(f"⚙️ 同步本地 reranker 模型到 FlashRank 缓存目录: {flashrank_cache_dir}")
+    shutil.copytree(local_model_dir, flashrank_cache_dir, dirs_exist_ok=True)
+
+# 如果缓存中有 onnx 文件，说明可以离线加载
+onnx_path = os.path.join(flashrank_cache_dir, "onnx")
+if os.path.exists(onnx_path):
+    print(f"✅ 检测到离线 FlashRank 模型缓存，禁用联网下载。")
+    os.environ["FLASHRANK_FORCE_LOCAL"] = "1"
+
 class RAGHandler:
     def __init__(self):
         self.qdrant_client = QdrantClient(url=config.QDRANT_URL)
