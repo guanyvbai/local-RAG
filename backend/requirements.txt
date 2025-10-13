@@ -24,6 +24,7 @@ unstructured[pdf,docx,md]
 markdown
 python-magic
 lxml
+nltk
 
 # Authentication
 passlib[bcrypt]

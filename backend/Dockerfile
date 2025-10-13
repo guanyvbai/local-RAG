@@ -3,6 +3,7 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+ENV NLTK_DATA=/app/nltk_data
 ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ENV HF_ENDPOINT=https://hf-mirror.com
 
@@ -19,8 +20,11 @@ RUN apt-get update -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+
+
 COPY backend/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
+
 
 COPY backend/ .
 COPY frontend/ /app/frontend

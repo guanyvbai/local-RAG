@@ -1,10 +1,10 @@
-# /* 文件名: backend/app.py, 版本号: 2.7 */
+# /* 文件名: backend/app.py, 版本号: 3.0 (MySQL 迁移版) */
 """
 FastAPI 主应用程序文件。
-【V2.7 更新】:
-- /api/load_nvd_data 路由现在接收一个目录路径，并默认为 /app/data/nvd_data。
-- 引入独立的 cve_handler 模块处理漏洞查询。
-- 新增 /api/cve_lookup 路由，由 cve_handler 负责其逻辑。
+【V3.0 更新】:
+- 移除了所有 sqlite3 相关的代码。
+- 引入了新的 database.py 模块来处理所有用户、对话和消息的数据库操作。
+- 所有相关的数据库操作都已重构为使用 SQLAlchemy ORM 和 MySQL。
 """
 
 # 1. 首先进行日志配置
@@ -18,9 +18,7 @@ logging.basicConfig(
 # 2. 然后再导入其他所有模块
 import os
 import io
-import sqlite3
 import re
-import time
 from fastapi import (
     FastAPI, Depends, UploadFile, File, HTTPException, Request, Form, status, Response
 )
@@ -28,6 +26,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
+from sqlalchemy.orm import Session
 
 # 导入我们自己的模块
 import config
@@ -35,91 +34,10 @@ import auth
 import document_parser
 from rag_handler import rag_handler
 from sql_query_handler import SQLQueryHandler
-from cve_handler import cve_handler  # <-- 【核心新增】
-
-# --- 数据库设置 ---
-DATA_DIR = "/app/data"
-DB_PATH = os.path.join(DATA_DIR, "rag_system.db")
-os.makedirs(DATA_DIR, exist_ok=True)
+from cve_handler import cve_handler
+from database import User as DBUser, Chat as DBChat, Message as DBMessage, init_db, get_db
 
 logger = logging.getLogger(__name__)
-
-# --- 数据库初始化与操作 (SQLite for users/chats) ---
-def init_db():
-    """初始化SQLite数据库"""
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, hashed_password TEXT)")
-        cursor.execute("CREATE TABLE IF NOT EXISTS chats (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users (id))")
-        cursor.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, chat_id INTEGER, role TEXT, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (chat_id) REFERENCES chats (id))")
-
-        cursor.execute("SELECT * FROM users WHERE username = 'admin'")
-        if cursor.fetchone() is None:
-            hashed_password = auth.get_password_hash("admin")
-            cursor.execute("INSERT INTO users (username, hashed_password) VALUES (?, ?)", ('admin', hashed_password))
-            logger.info("Default user 'admin' with password 'admin' created.")
-        conn.commit()
-
-def get_user(username: str):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-        return cursor.fetchone()
-
-def create_user(username: str, password: str):
-    hashed_password = auth.get_password_hash(password)
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        try:
-            cursor.execute("INSERT INTO users (username, hashed_password) VALUES (?, ?)", (username, hashed_password))
-            conn.commit()
-        except sqlite3.IntegrityError:
-            return None
-    return get_user(username)
-
-def create_new_chat(user_id: int, title: str) -> int:
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO chats (user_id, title) VALUES (?, ?)", (user_id, title))
-        conn.commit()
-        return cursor.lastrowid
-
-def get_user_chats(user_id: int) -> List[Dict]:
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, title, created_at FROM chats WHERE user_id = ? ORDER BY created_at DESC", (user_id,))
-        return [dict(row) for row in cursor.fetchall()]
-
-def get_chat_messages(chat_id: int, user_id: int) -> List[Dict]:
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM chats WHERE id = ? AND user_id = ?", (chat_id, user_id))
-        if cursor.fetchone() is None:
-            return []
-        cursor.execute("SELECT role, content FROM messages WHERE chat_id = ? ORDER BY timestamp ASC", (chat_id,))
-        return [dict(row) for row in cursor.fetchall()]
-
-def add_message_to_chat(chat_id: int, role: str, content: str):
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)", (chat_id, role, content))
-        conn.commit()
-
-def delete_chat(chat_id: int, user_id: int):
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM messages WHERE chat_id = ? AND EXISTS (SELECT 1 FROM chats WHERE id = ? AND user_id = ?)", (chat_id, chat_id, user_id))
-        cursor.execute("DELETE FROM chats WHERE id = ? AND user_id = ?", (chat_id, user_id))
-        conn.commit()
-
-def rename_chat(chat_id: int, new_title: str, user_id: int):
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE chats SET title = ? WHERE id = ? AND user_id = ?", (new_title, chat_id, user_id))
-        conn.commit()
 
 # --- FastAPI 应用实例和启动事件 ---
 app = FastAPI(title="Intelligent RAG & SQL System")
@@ -133,6 +51,7 @@ except Exception as e:
 
 @app.on_event("startup")
 def on_startup():
+    # 使用 database.py 中的函数初始化数据库
     init_db()
 
 # --- Pydantic 模型定义 ---
@@ -151,11 +70,11 @@ class AskRequest(BaseModel):
 class SQLQueryRequest(BaseModel):
     question: str
 
-class CPELookupRequest(BaseModel): # <-- 【核心新增】
+class CPELookupRequest(BaseModel):
     cpe: str
 
-class NVDLoadRequest(BaseModel): # <-- 【核心新增】
-    directory_path: str = "/app/data/nvd_data" # 设置默认路径
+class NVDLoadRequest(BaseModel):
+    directory_path: str = "/app/data/nvd_data"
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
@@ -165,32 +84,42 @@ class RenameChatRequest(BaseModel):
     new_title: str
 
 # --- 认证依赖 ---
-async def get_current_active_user(token: str = Depends(auth.oauth2_scheme)) -> User:
+async def get_current_active_user(token: str = Depends(auth.oauth2_scheme), db: Session = Depends(get_db)) -> User:
     payload = auth.decode_access_token(token)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
-    user_data = get_user(username=payload.get("sub"))
-    if not user_data:
+    username: str = payload.get("sub")
+    if username is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
+    
+    user = db.query(DBUser).filter(DBUser.username == username).first()
+    if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return User(id=user_data['id'], username=user_data['username'])
+    return User(id=user.id, username=user.username)
+
 
 # --- API 路由 ---
 
 # --- 认证路由 ---
 @app.post("/api/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = get_user(form_data.username)
-    if not user or not auth.verify_password(form_data.password, user['hashed_password']):
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(DBUser).filter(DBUser.username == form_data.username).first()
+    if not user or not auth.verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
-    access_token = auth.create_access_token(data={"sub": user['username']})
+    access_token = auth.create_access_token(data={"sub": user.username})
     return Token(access_token=access_token, token_type="bearer")
 
 @app.post("/api/register", status_code=status.HTTP_201_CREATED)
-async def register(user: UserCreate):
-    if get_user(user.username):
+async def register(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(DBUser).filter(DBUser.username == user.username).first()
+    if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
-    if not create_user(user.username, user.password):
-        raise HTTPException(status_code=500, detail="Could not create user")
+    
+    hashed_password = auth.get_password_hash(user.password)
+    new_user = DBUser(username=user.username, hashed_password=hashed_password)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
     return {"message": "User created successfully. Please log in."}
 
 # --- 知识库管理路由 ---
@@ -246,37 +175,67 @@ async def upload_endpoint(file: UploadFile = File(...), collection_name: str = F
 # --- 聊天与工作流路由 ---
 @app.get("/api/workflows", response_model=List[Dict])
 async def get_workflows(current_user: User = Depends(get_current_active_user)):
-    """返回在 config.py 中定义的可用工作流列表。"""
     return config.AVAILABLE_WORKFLOWS
 
 @app.get("/api/chats", response_model=List[Dict])
-async def get_chats(current_user: User = Depends(get_current_active_user)):
-    return get_user_chats(current_user.id)
+async def get_chats(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    chats = db.query(DBChat).filter(DBChat.user_id == current_user.id).order_by(DBChat.created_at.desc()).all()
+    return [{"id": chat.id, "title": chat.title, "created_at": chat.created_at} for chat in chats]
 
 @app.post("/api/chats", response_model=Dict)
-async def create_chat(current_user: User = Depends(get_current_active_user)):
-    chat_id = create_new_chat(current_user.id, "新的对话")
-    return {"id": chat_id, "title": "新的对话"}
+async def create_chat(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    new_chat = DBChat(user_id=current_user.id, title="新的对话")
+    db.add(new_chat)
+    db.commit()
+    db.refresh(new_chat)
+    return {"id": new_chat.id, "title": new_chat.title}
 
 @app.get("/api/chats/{chat_id}", response_model=List[Dict])
-async def get_messages(chat_id: int, current_user: User = Depends(get_current_active_user)):
-    return get_chat_messages(chat_id, current_user.id)
+async def get_messages(chat_id: int, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    chat = db.query(DBChat).filter(DBChat.id == chat_id, DBChat.user_id == current_user.id).first()
+    if not chat:
+        return []
+    messages = db.query(DBMessage).filter(DBMessage.chat_id == chat_id).order_by(DBMessage.timestamp.asc()).all()
+    return [{"role": msg.role, "content": msg.content} for msg in messages]
 
-@app.delete("/api/chats/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_chat_endpoint(chat_id: int, current_user: User = Depends(get_current_active_user)):
-    delete_chat(chat_id, current_user.id)
-
-@app.put("/api/chats/{chat_id}/rename")
-async def rename_chat_endpoint(chat_id: int, request: RenameChatRequest, current_user: User = Depends(get_current_active_user)):
-    rename_chat(chat_id, request.new_title, current_user.id)
+@app.post("/api/chats/{chat_id}/messages")
+async def add_message_to_chat(chat_id: int, message: Dict, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    chat = db.query(DBChat).filter(DBChat.id == chat_id, DBChat.user_id == current_user.id).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    new_message = DBMessage(chat_id=chat_id, role=message['role'], content=message['content'])
+    db.add(new_message)
+    db.commit()
     return {"status": "success"}
 
+@app.delete("/api/chats/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_chat_endpoint(chat_id: int, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    chat = db.query(DBChat).filter(DBChat.id == chat_id, DBChat.user_id == current_user.id).first()
+    if chat:
+        db.delete(chat)
+        db.commit()
+
+@app.put("/api/chats/{chat_id}/rename")
+async def rename_chat_endpoint(chat_id: int, request: RenameChatRequest, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    chat = db.query(DBChat).filter(DBChat.id == chat_id, DBChat.user_id == current_user.id).first()
+    if chat:
+        chat.title = request.new_title
+        db.commit()
+        return {"status": "success"}
+    raise HTTPException(status_code=404, detail="Chat not found")
+
 @app.post("/api/ask")
-async def ask(request: AskRequest, current_user: User = Depends(get_current_active_user)):
+async def ask(request: AskRequest, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """处理 RAG 知识库问答请求"""
-    add_message_to_chat(request.chat_id, "user", request.question)
-    
-    messages = get_chat_messages(request.chat_id, current_user.id)
+    # Save user message
+    user_message = DBMessage(chat_id=request.chat_id, role="user", content=request.question)
+    db.add(user_message)
+    db.commit()
+
+    messages_from_db = db.query(DBMessage).filter(DBMessage.chat_id == request.chat_id).order_by(DBMessage.timestamp.asc()).all()
+    messages = [{"role": msg.role, "content": msg.content} for msg in messages_from_db]
+
     history = [
         {"user": messages[i]['content'], "assistant": messages[i+1]['content']} 
         for i in range(0, len(messages)-1, 2)
@@ -291,7 +250,14 @@ async def ask(request: AskRequest, current_user: User = Depends(get_current_acti
             for chunk in answer_generator:
                 full_response += chunk
                 yield chunk
-            add_message_to_chat(request.chat_id, "assistant", full_response)
+            
+            # Save assistant response after stream is complete
+            db_session = next(get_db())
+            assistant_message = DBMessage(chat_id=request.chat_id, role="assistant", content=full_response)
+            db_session.add(assistant_message)
+            db_session.commit()
+            db_session.close()
+
         except Exception as e:
             logger.error(f"Error during RAG answer generation: {e}", exc_info=True)
             yield "抱歉，回答时出现错误。"
@@ -309,27 +275,18 @@ async def sql_query(request: SQLQueryRequest, current_user: User = Depends(get_c
     generated_sql = sql_handler.generate_sql_query(request.question, db_schema)
     return Response(content=generated_sql, media_type="text/plain")
 
-# --- 【核心新增】CPE 漏洞查询路由 ---
+# --- CPE 漏洞查询路由 ---
 @app.post("/api/cve_lookup", response_model=List[Dict[str, Any]])
 async def cve_lookup(request: CPELookupRequest, current_user: User = Depends(get_current_active_user)):
-    """
-    接收CPE字符串，返回相关的漏洞信息。此端点由 n8n 调用。
-    """
     return cve_handler.search_vulnerabilities_by_cpe(request.cpe)
 
-# --- 【核心新增】手动加载NVD数据路由 ---
 @app.post("/api/load_nvd_data")
 async def load_nvd_data(request: NVDLoadRequest, current_user: User = Depends(get_current_active_user)):
-    """
-    手动触发NVD JSON数据从指定目录加载到Qdrant。
-    默认加载 /app/data/nvd_data 目录下的所有 .json 文件。
-    """
     directory_path = request.directory_path
     if not os.path.isdir(directory_path):
         raise HTTPException(status_code=404, detail=f"目录未找到: {directory_path}")
     
     try:
-        # 在生产环境中，这里应该启动一个后台任务
         cve_handler.load_nvd_data_from_directory(directory_path)
         return JSONResponse(
             content={"status": "success", "message": f"NVD数据加载任务已从目录 '{directory_path}' 启动，请关注后端日志。"}, 
@@ -350,17 +307,20 @@ async def serve_frontend(request: Request, full_path: str):
     file_path = os.path.join(base_dir, path)
 
     if os.path.exists(file_path) and os.path.isfile(file_path):
-        return HTMLResponse(open(file_path, 'r', encoding='utf-8').read())
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return HTMLResponse(f.read())
 
     # 兼容 /login, /register 等无 .html 后缀的路径
     if full_path in ["login", "register", "documents"]:
         html_file = os.path.join(base_dir, f'{full_path}.html')
         if os.path.exists(html_file):
-            return HTMLResponse(open(html_file, 'r', encoding='utf-8').read())
+            with open(html_file, 'r', encoding='utf-8') as f:
+                return HTMLResponse(f.read())
 
     # 对于 SPA 应用，所有未匹配的路径都应返回 index.html
     index_path = os.path.join(base_dir, 'index.html')
     if os.path.exists(index_path):
-        return HTMLResponse(open(index_path, 'r', encoding='utf-8').read())
+        with open(index_path, 'r', encoding='utf-8') as f:
+            return HTMLResponse(f.read())
 
     raise HTTPException(status_code=404, detail="Not Found")

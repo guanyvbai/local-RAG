@@ -12,9 +12,8 @@ services:
       - "8000:8000"
     volumes:
       - ./app_data:/app/data
-      - ./models/reranker:/app/models/reranker
-      - ./flashrank_cache:/root/.cache/flashrank/models/ms-marco-MiniLM-L-12-v2
       - ./models/cross-encoder:/app/models/cross-encoder
+      - ./nltk_data:/app/nltk_data
     env_file:
       - .env
     networks:
