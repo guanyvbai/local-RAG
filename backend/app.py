@@ -235,6 +235,7 @@ def _process_uploaded_document(file_path: Path, original_filename: str, collecti
 
 
 async def _save_upload_to_disk(upload: UploadFile, destination: Path) -> int:
+    logger.info("开始保存上传文件 '%s' 到本地路径 %s。", upload.filename, destination)
     total_written = 0
     with destination.open("wb") as buffer:
         while True:
@@ -244,6 +245,11 @@ async def _save_upload_to_disk(upload: UploadFile, destination: Path) -> int:
             buffer.write(chunk)
             total_written += len(chunk)
     await upload.close()
+    logger.info(
+        "上传文件 '%s' 写入完成，共写入 %.2f MB。",
+        upload.filename,
+        total_written / (1024 * 1024) if total_written else 0,
+    )
     return total_written
 
 
@@ -254,6 +260,12 @@ async def upload_endpoint(
     collection_name: str = Form(...),
     current_user: User = Depends(get_current_active_user)
 ):
+    logger.info(
+        "用户 '%s' 请求上传文件 '%s' 到集合 '%s'。",
+        current_user.username,
+        file.filename,
+        collection_name,
+    )
     parser = document_parser.get_parser(file.filename)
     if not parser:
         raise HTTPException(status_code=400, detail="Unsupported file type")
@@ -271,7 +283,17 @@ async def upload_endpoint(
         destination.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
+    logger.info(
+        "文件 '%s' 保存成功 (%.2f MB)，提交至后台任务进行解析与向量化。",
+        file.filename,
+        total_bytes / (1024 * 1024),
+    )
     background_tasks.add_task(_process_uploaded_document, destination, file.filename, collection_name)
+    logger.info(
+        "文件 '%s' 的后台处理任务已排队，临时文件: %s。",
+        file.filename,
+        destination,
+    )
     return {
         "status": "accepted",
         "message": f"File '{file.filename}' queued for processing in collection '{collection_name}'."
@@ -308,10 +330,16 @@ async def add_message_to_chat(chat_id: int, message: Dict, current_user: User = 
     chat = db.query(DBChat).filter(DBChat.id == chat_id, DBChat.user_id == current_user.id).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
-    
+
     new_message = DBMessage(chat_id=chat_id, role=message['role'], content=message['content'])
     db.add(new_message)
     db.commit()
+    logger.info(
+        "用户 '%s' 在对话 %d 中新增一条 %s 消息。",
+        current_user.username,
+        chat_id,
+        message['role'],
+    )
     return {"status": "success"}
 
 @app.delete("/api/chats/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -320,6 +348,7 @@ async def delete_chat_endpoint(chat_id: int, current_user: User = Depends(get_cu
     if chat:
         db.delete(chat)
         db.commit()
+        logger.info("用户 '%s' 删除了对话 %d。", current_user.username, chat_id)
 
 @app.put("/api/chats/{chat_id}/rename")
 async def rename_chat_endpoint(chat_id: int, request: RenameChatRequest, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
@@ -327,6 +356,12 @@ async def rename_chat_endpoint(chat_id: int, request: RenameChatRequest, current
     if chat:
         chat.title = request.new_title
         db.commit()
+        logger.info(
+            "用户 '%s' 将对话 %d 重命名为 '%s'。",
+            current_user.username,
+            chat_id,
+            request.new_title,
+        )
         return {"status": "success"}
     raise HTTPException(status_code=404, detail="Chat not found")
 
@@ -335,6 +370,12 @@ async def ask(request: AskRequest, current_user: User = Depends(get_current_acti
     """处理 RAG 知识库问答请求"""
     rag_handler_instance = _require_rag_handler()
 
+    logger.info(
+        "用户 '%s' 在对话 %d 提出问题: '%s'。",
+        current_user.username,
+        request.chat_id,
+        request.question if len(request.question) <= 60 else f"{request.question[:57]}...",
+    )
     # Save user message
     user_message = DBMessage(chat_id=request.chat_id, role="user", content=request.question)
     db.add(user_message)
@@ -349,6 +390,12 @@ async def ask(request: AskRequest, current_user: User = Depends(get_current_acti
         if messages[i]['role'] == 'user' and messages[i+1]['role'] == 'assistant'
     ]
     history_for_prompt = history[-config.CONVERSATION_HISTORY_K:]
+    logger.info(
+        "对话 %d 的历史轮次: %d (截取用于提示的轮次: %d)。",
+        request.chat_id,
+        len(history),
+        len(history_for_prompt),
+    )
 
     def stream_generator():
         full_response = ""
@@ -357,13 +404,18 @@ async def ask(request: AskRequest, current_user: User = Depends(get_current_acti
             for chunk in answer_generator:
                 full_response += chunk
                 yield chunk
-            
+
             # Save assistant response after stream is complete
             db_session = next(get_db())
             assistant_message = DBMessage(chat_id=request.chat_id, role="assistant", content=full_response)
             db_session.add(assistant_message)
             db_session.commit()
             db_session.close()
+            logger.info(
+                "对话 %d 的回答生成完成，响应长度 %d 字符。",
+                request.chat_id,
+                len(full_response),
+            )
 
         except Exception as e:
             logger.error(f"Error during RAG answer generation: {e}", exc_info=True)
