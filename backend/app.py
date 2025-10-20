@@ -20,13 +20,15 @@ import os
 import io
 import re
 from fastapi import (
-    FastAPI, Depends, UploadFile, File, HTTPException, Request, Form, status, Response
+    FastAPI, Depends, UploadFile, File, HTTPException, Request, Form, status, Response, BackgroundTasks
 )
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 from sqlalchemy.orm import Session
+from pathlib import Path
+import uuid
 
 # 导入我们自己的模块
 import config
@@ -41,6 +43,9 @@ logger = logging.getLogger(__name__)
 
 # --- FastAPI 应用实例和启动事件 ---
 app = FastAPI(title="Intelligent RAG & SQL System")
+
+UPLOAD_STORAGE_DIR = Path(config.UPLOAD_STORAGE_DIR)
+UPLOAD_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 try:
     sql_handler = SQLQueryHandler()
@@ -153,24 +158,73 @@ async def delete_document_endpoint(filename: str, collection_name: str = Form(..
         return {"status": "success"}
     raise HTTPException(status_code=500, detail="Failed to delete document")
 
+def _process_uploaded_document(file_path: Path, original_filename: str, collection_name: str):
+    parser = document_parser.get_parser(original_filename)
+    if not parser:
+        logger.error(f"No parser available for file '{original_filename}'.")
+        return
+
+    try:
+        with file_path.open("rb") as file_handle:
+            file_bytes = file_handle.read()
+        parsed_content = parser(io.BytesIO(file_bytes), original_filename)
+        if not parsed_content:
+            logger.error(f"Parsed content empty for '{original_filename}'.")
+            return
+
+        rag_handler.delete_document(original_filename, collection_name)
+        rag_handler.process_and_embed_document(parsed_content, original_filename, collection_name)
+    except Exception as exc:
+        logger.error(f"Background processing failed for '{original_filename}': {exc}", exc_info=True)
+    finally:
+        try:
+            file_path.unlink(missing_ok=True)
+        except Exception as cleanup_exc:
+            logger.warning(f"Failed to remove temporary file '{file_path}': {cleanup_exc}")
+
+
+async def _save_upload_to_disk(upload: UploadFile, destination: Path) -> int:
+    total_written = 0
+    with destination.open("wb") as buffer:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            buffer.write(chunk)
+            total_written += len(chunk)
+    await upload.close()
+    return total_written
+
+
 @app.post("/api/upload")
-async def upload_endpoint(file: UploadFile = File(...), collection_name: str = Form(...), current_user: User = Depends(get_current_active_user)):
+async def upload_endpoint(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    collection_name: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
     parser = document_parser.get_parser(file.filename)
     if not parser:
         raise HTTPException(status_code=400, detail="Unsupported file type")
-    try:
-        content_bytes = await file.read()
-        parsed_content = parser(io.BytesIO(content_bytes), file.filename)
-        if not parsed_content:
-            raise HTTPException(status_code=400, detail="Could not extract text from file.")
 
-        rag_handler.delete_document(file.filename, collection_name)
-        rag_handler.process_and_embed_document(parsed_content, file.filename, collection_name)
-        
-        return {"status": "success", "message": f"File uploaded to {collection_name}"}
-    except Exception as e:
-        logger.error(f"Error processing file {file.filename}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    temp_filename = f"{uuid.uuid4().hex}_{file.filename}"
+    destination = UPLOAD_STORAGE_DIR / temp_filename
+
+    try:
+        total_bytes = await _save_upload_to_disk(file, destination)
+    except Exception as exc:
+        logger.error(f"Failed to save upload '{file.filename}' to disk: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to store uploaded file")
+
+    if total_bytes == 0:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    background_tasks.add_task(_process_uploaded_document, destination, file.filename, collection_name)
+    return {
+        "status": "accepted",
+        "message": f"File '{file.filename}' queued for processing in collection '{collection_name}'."
+    }
 
 # --- 聊天与工作流路由 ---
 @app.get("/api/workflows", response_model=List[Dict])
