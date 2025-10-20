@@ -45,3 +45,8 @@ CONVERSATION_HISTORY_K = 3
 # --- Text-to-SQL ---
 SQL_INCLUDED_TABLES_STR = os.getenv("SQL_INCLUDED_TABLES", "")
 SQL_INCLUDED_TABLES = [table.strip() for table in SQL_INCLUDED_TABLES_STR.split(',') if table.strip()]
+
+# --- Document ingestion & indexing ---
+UPLOAD_STORAGE_DIR = os.getenv("UPLOAD_STORAGE_DIR", "/app/data/uploads")
+BM25_REBUILD_THRESHOLD = int(os.getenv("BM25_REBUILD_THRESHOLD", "5"))
+BM25_REBUILD_INTERVAL_SECONDS = int(os.getenv("BM25_REBUILD_INTERVAL_SECONDS", "300"))
