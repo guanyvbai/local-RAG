@@ -1,5 +1,4 @@
 # /* 文件名: backend/rag_handler.py, 版本号: 6.0 (SentenceTransformer 替换版) */
-import ollama
 from qdrant_client import QdrantClient, models
 from typing import List, Dict, Union, Generator, Any, Optional
 import logging
@@ -15,6 +14,7 @@ import config
 from router import QueryRouter
 from document_parser import ParsedElement
 from chunker import create_multi_vector_chunks
+from ollama_client import get_ollama_client
 from threading import RLock
 
 logger = logging.getLogger(__name__)
@@ -27,11 +27,11 @@ class RAGHandler:
     def __init__(self):
         self.qdrant_client = QdrantClient(url=config.QDRANT_URL)
         
-        self.embedding_client = ollama.Client(host=config.OLLAMA_BASE_URL)
+        self.embedding_client = get_ollama_client()
         logger.info(f"使用Ollama嵌入模型: {config.EMBEDDING_MODEL_NAME}")
         self.embedding_dim = self._get_ollama_embedding_dimension()
 
-        self.llm_client = ollama.Client(host=config.OLLAMA_BASE_URL)
+        self.llm_client = self.embedding_client
         
         # --- 【核心替换】加载 sentence-transformers CrossEncoder 模型 ---
         model_path = "/app/models/cross-encoder" # 对应 docker-compose.yml 的挂载路径

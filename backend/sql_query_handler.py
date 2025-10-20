@@ -10,12 +10,12 @@ import logging
 import os
 import re
 from typing import List, Optional, Dict, Any
-import ollama
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import Response
 
 import config
+from ollama_client import get_ollama_client
 
 from threading import RLock
 
@@ -39,7 +39,7 @@ class SQLQueryHandler:
             logger.error(f"创建数据库引擎失败: {e}", exc_info=True)
             raise
             
-        self.llm_client = ollama.Client(host=config.OLLAMA_BASE_URL)
+        self.llm_client = get_ollama_client()
         # --- 【核心修改】在初始化时加载配置 ---
         self.included_tables = config.SQL_INCLUDED_TABLES
         if self.included_tables:

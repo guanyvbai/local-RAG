@@ -12,9 +12,9 @@ import uuid
 import json
 import re
 from typing import List, Dict, Any, TYPE_CHECKING
-import ollama 
 
 import config
+from ollama_client import get_ollama_client
 
 # 避免循环导入
 if TYPE_CHECKING:
@@ -66,7 +66,7 @@ def _call_llm_for_tasks(text_chunk: str) -> dict:
 """
     response_text = "" # 初始化以备在异常记录中使用
     try:
-        client = ollama.Client(host=config.OLLAMA_BASE_URL)
+        client = get_ollama_client()
         response = client.chat(
             model=config.OLLAMA_MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
