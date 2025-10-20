@@ -9,7 +9,7 @@ Text-to-SQL 核心处理器 V1.3
 import logging
 import os
 import re
-from typing import List
+from typing import List, Optional, Dict, Any
 import ollama
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,8 +17,14 @@ from fastapi import Response
 
 import config
 
+from threading import RLock
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+_sql_handler_lock = RLock()
+_sql_handler_instance: Optional["SQLQueryHandler"] = None
+_sql_handler_error: Optional[BaseException] = None
 
 class SQLQueryHandler:
     def __init__(self):
@@ -144,6 +150,39 @@ class SQLQueryHandler:
         except Exception as e:
             logger.error(f"调用Ollama模型生成SQL时出错: {e}", exc_info=True)
             return f"-- 调用LLM时出错: {e}"
+
+def get_sql_query_handler(force_refresh: bool = False) -> "SQLQueryHandler":
+    global _sql_handler_instance, _sql_handler_error
+
+    if _sql_handler_instance is not None and not force_refresh:
+        return _sql_handler_instance
+
+    with _sql_handler_lock:
+        if _sql_handler_instance is not None and not force_refresh:
+            return _sql_handler_instance
+
+        try:
+            handler = SQLQueryHandler()
+        except Exception as exc:
+            _sql_handler_error = exc
+            logger.error("SQLQueryHandler 初始化失败。", exc_info=True)
+            raise
+        else:
+            _sql_handler_instance = handler
+            _sql_handler_error = None
+            return handler
+
+
+def get_sql_handler_status() -> Dict[str, Any]:
+    error_message = None
+    if _sql_handler_error is not None:
+        error_message = str(_sql_handler_error)
+
+    return {
+        "ready": _sql_handler_instance is not None,
+        "error": error_message,
+    }
+
 
 if __name__ == "__main__":
     try:

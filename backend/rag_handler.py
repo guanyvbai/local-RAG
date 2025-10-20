@@ -1,11 +1,12 @@
 # /* 文件名: backend/rag_handler.py, 版本号: 6.0 (SentenceTransformer 替换版) */
 import ollama
 from qdrant_client import QdrantClient, models
-from typing import List, Dict, Union, Generator, Any
+from typing import List, Dict, Union, Generator, Any, Optional
 import logging
 import time
 import os
 import pickle
+from collections import defaultdict
 from rank_bm25 import BM25Okapi
 # --- 【核心替换】导入 CrossEncoder ---
 from sentence_transformers import CrossEncoder
@@ -14,6 +15,7 @@ import config
 from router import QueryRouter
 from document_parser import ParsedElement
 from chunker import create_multi_vector_chunks
+from threading import RLock
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,10 @@ class RAGHandler:
         )
         
         self.bm25_models_cache = {}
+        self._bm25_pending_counts = defaultdict(int)
+        self._bm25_last_rebuild = {collection: time.time() for collection in config.AVAILABLE_COLLECTIONS}
+        self.bm25_rebuild_threshold = getattr(config, "BM25_REBUILD_THRESHOLD", 5)
+        self.bm25_rebuild_interval = getattr(config, "BM25_REBUILD_INTERVAL_SECONDS", 300)
         for collection_name in config.AVAILABLE_COLLECTIONS:
             self._ensure_collection_exists(collection_name)
     
@@ -222,7 +228,7 @@ class RAGHandler:
                     ))
         if points_to_upsert:
             self.qdrant_client.upsert(collection_name=collection_name, points=points_to_upsert, wait=True)
-            self._rebuild_bm25_model_for_collection(collection_name)
+            self._maybe_rebuild_bm25(collection_name)
     
     def _get_bm25_vector_for_query(self, bm25_model: BM25Okapi, query_keywords: List[str]) -> models.SparseVector:
         if not hasattr(bm25_model, 'word_to_id'):
@@ -251,10 +257,38 @@ class RAGHandler:
                 ])),
                 wait=True
             )
-            self._rebuild_bm25_model_for_collection(collection_name)
+            self._maybe_rebuild_bm25(collection_name, force=True)
             return True
         except Exception as e:
             return False
+
+    def flush_bm25_models(self, collection_name: str):
+        """Force rebuild the BM25 model for a collection."""
+        self._maybe_rebuild_bm25(collection_name, force=True)
+
+    def _maybe_rebuild_bm25(self, collection_name: str, force: bool = False):
+        if force:
+            self._rebuild_bm25_model_for_collection(collection_name)
+            self._bm25_pending_counts[collection_name] = 0
+            self._bm25_last_rebuild[collection_name] = time.time()
+            return
+
+        self._bm25_pending_counts[collection_name] += 1
+        pending = self._bm25_pending_counts[collection_name]
+        last_rebuild = self._bm25_last_rebuild.get(collection_name)
+        now = time.time()
+        if last_rebuild is None:
+            last_rebuild = now
+            self._bm25_last_rebuild[collection_name] = now
+
+        should_rebuild = (
+            pending >= self.bm25_rebuild_threshold
+            or (pending > 0 and (now - last_rebuild) >= self.bm25_rebuild_interval)
+        )
+        if should_rebuild:
+            self._rebuild_bm25_model_for_collection(collection_name)
+            self._bm25_pending_counts[collection_name] = 0
+            self._bm25_last_rebuild[collection_name] = now
     
     def generate_answer(self, query: str, context: List[str], chat_history: List[Dict[str, str]]):
         prompt = self._build_prompt(query, context, chat_history)
@@ -333,4 +367,41 @@ class RAGHandler:
             logger.error(f"Failed to list documents from Qdrant: {e}")
             return []
 
-rag_handler = RAGHandler()
+_rag_handler_lock = RLock()
+_rag_handler_instance: Optional[RAGHandler] = None
+_rag_handler_error: Optional[BaseException] = None
+
+
+def get_rag_handler(force_refresh: bool = False) -> RAGHandler:
+    global _rag_handler_instance, _rag_handler_error
+
+    if _rag_handler_instance is not None and not force_refresh:
+        return _rag_handler_instance
+
+    with _rag_handler_lock:
+        if _rag_handler_instance is not None and not force_refresh:
+            return _rag_handler_instance
+
+        try:
+            handler = RAGHandler()
+        except Exception as exc:
+            _rag_handler_error = exc
+            logger.error("RAGHandler 初始化失败。", exc_info=True)
+            raise
+        else:
+            _rag_handler_instance = handler
+            _rag_handler_error = None
+            return handler
+
+
+def get_rag_handler_status() -> Dict[str, Any]:
+    """Return current readiness status for monitoring endpoints."""
+
+    error_message = None
+    if _rag_handler_error is not None:
+        error_message = str(_rag_handler_error)
+
+    return {
+        "ready": _rag_handler_instance is not None,
+        "error": error_message,
+    }
