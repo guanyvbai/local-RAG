@@ -297,16 +297,19 @@ class RAGHandler:
     def _build_prompt(self, query: str, context: List[str], chat_history: List[Dict[str, str]]) -> List[Dict[str, str]]:
         context_str = "\n---\n".join(context) if context else "无"
         history_str = "\n".join([f"用户: {item['user']}\n助手: {item['assistant']}" for item in chat_history])
-        system_message = f"""你是一个专业的AI知识库助手。请严格遵循以下规则回答问题：
+
+        if context:
+            system_message = f"""你是一个专业的AI知识库助手。请严格遵循以下规则回答问题：
 1.  **忠于原文**: 你的首要任务是基于下面提供的“[知识库上下文]”来回答问题。答案必须完全来源于上下文，不得进行任何形式的推理、联想或添加上下文之外的信息。
 2.  **明确引用**: 在回答时，清楚地说明你的信息来源于知识库。例如，你可以说：“根据知识库中的信息...”。
-3.  **坦诚未知**: 如果“[知识库上下文]”为空，或者上下文内容与用户问题完全无关，无法找到答案，你**必须**明确地回答：“抱歉，我在知识库中没有找到与您问题相关的确切信息。” **严禁**使用自己的内置知识回答。
-4.  **整合信息**: 如果多段上下文都与问题相关，请将它们进行逻辑整合，用流畅的语言进行回复，而不是简单地罗列。
+3.  **整合信息**: 如果多段上下文都与问题相关，请将它们进行逻辑整合，用流畅的语言进行回复，而不是简单地罗列。
 ---
 [知识库上下文]
 {context_str}
 ---
 """
+        else:
+            system_message = """你是一个通用型大型语言模型助手。当前知识库中没有可用的上下文，请直接基于你掌握的常识与公开知识回答用户问题，给出清晰、流畅且有帮助的回复。"""
         messages = [{"role": "system", "content": system_message}]
         if history_str:
             messages.append({"role": "system", "content": f"[历史对话参考]\n{history_str}"})
