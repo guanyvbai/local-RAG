@@ -1,13 +1,14 @@
 # /* 文件名: backend/router.py, 版本号: 2.0 */
 # backend/router.py (已修正 Qdrant 查询格式)
 import logging
-from typing import Optional
+from typing import List, Optional
 import openai
 import ollama
 from qdrant_client import QdrantClient, models  # <-- 【核心修正】导入 models
 from sentence_transformers import SentenceTransformer
 import config
-from typing import List
+
+DEFAULT_COLLECTIONS = list(config.AVAILABLE_COLLECTIONS)
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,43 @@ class QueryRouter:
         self.qdrant_client = qdrant_client
         self.embedding_model = embedding_model
         self.llm_client = llm_client
-        self.collections = config.AVAILABLE_COLLECTIONS
+        self.collections = list(DEFAULT_COLLECTIONS)
+        self._refresh_collections()
+
+    def _refresh_collections(self):
+        """从 Qdrant 中刷新集合列表，必要时退回到默认配置。"""
+        remote_collections = self._fetch_available_collections()
+
+        if remote_collections:
+            updated_collections = remote_collections
+        else:
+            logger.warning("无法从 Qdrant 获取集合列表，继续使用本地默认集合配置。")
+            updated_collections = []
+
+        # 始终确保默认集合可作为回退选项
+        if config.QDRANT_COLLECTION_NAME and config.QDRANT_COLLECTION_NAME not in updated_collections:
+            updated_collections.append(config.QDRANT_COLLECTION_NAME)
+
+        if not updated_collections:
+            updated_collections = list(DEFAULT_COLLECTIONS)
+
+        # 去重同时保持顺序
+        seen = set()
+        self.collections = [name for name in updated_collections if not (name in seen or seen.add(name))]
+
+    def _fetch_available_collections(self) -> List[str]:
+        try:
+            response = self.qdrant_client.get_collections()
+        except Exception as exc:
+            logger.error(f"获取集合列表失败: {exc}")
+            return []
+
+        remote_collections: List[str] = []
+        for collection in getattr(response, "collections", []) or []:
+            name = getattr(collection, "name", None)
+            if name:
+                remote_collections.append(name)
+        return remote_collections
 
     def _get_query_vector(self, query: str) -> Optional[List[float]]:
         """根据客户端类型，使用正确的方法生成向量"""
@@ -31,6 +68,8 @@ class QueryRouter:
             return None
 
     def _route_by_similarity(self, query: str) -> Optional[str]:
+        self._refresh_collections()
+
         query_vector = self._get_query_vector(query)
         if not query_vector:
             return None
@@ -65,6 +104,8 @@ class QueryRouter:
             return None
 
     def _route_by_llm(self, query: str) -> Optional[str]:
+        self._refresh_collections()
+
         prompt = f"""You are an expert query router. Your task is to classify the user's query into one of the predefined databases.
 Follow these rules strictly:
 1. Read the user's query carefully.
@@ -115,3 +156,4 @@ Follow these rules strictly:
         else:
             logger.info("=== FINAL ROUTING DECISION: None (Fallback to General Knowledge) ===")
         return decision
+

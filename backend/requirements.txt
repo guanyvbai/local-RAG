@@ -3,6 +3,7 @@
 fastapi
 uvicorn[standard]
 python-multipart
+python-dotenv
 
 # RAG Core
 qdrant-client==1.9.1
@@ -44,3 +45,4 @@ PyMySQL
 torch
 torchvision
 torchaudio
+
