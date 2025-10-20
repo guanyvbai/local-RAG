@@ -1,6 +1,6 @@
 # /* 文件名: backend/app.py, 版本号: 3.0 (MySQL 迁移版) */
 """
-FastAPI 主应用程序文件。111
+FastAPI 主应用程序文件。
 【V3.0 更新】:
 - 移除了所有 sqlite3 相关的代码。
 - 引入了新的 database.py 模块来处理所有用户、对话和消息的数据库操作。
