@@ -184,6 +184,12 @@ async def system_status(current_user: User = Depends(get_current_active_user)):
     }
 
 def _process_uploaded_document(file_path: Path, original_filename: str, collection_name: str):
+    logger.info(
+        "开始后台处理上传文件 '%s'，目标集合 '%s'。临时文件: %s",
+        original_filename,
+        collection_name,
+        file_path,
+    )
     parser = document_parser.get_parser(original_filename)
     if not parser:
         logger.error(f"No parser available for file '{original_filename}'.")
@@ -197,6 +203,13 @@ def _process_uploaded_document(file_path: Path, original_filename: str, collecti
             logger.error(f"Parsed content empty for '{original_filename}'.")
             return
 
+        parsed_count = len(parsed_content) if isinstance(parsed_content, list) else 'unknown'
+        logger.info(
+            "文件 '%s' 解析完成，得到 %s 个结构化元素，准备进入分块与向量化流程。",
+            original_filename,
+            parsed_count,
+        )
+
         try:
             handler = get_rag_handler()
         except Exception as handler_exc:
@@ -205,6 +218,11 @@ def _process_uploaded_document(file_path: Path, original_filename: str, collecti
             )
             return
 
+        logger.info(
+            "清理集合 '%s' 中已有的文档 '%s' 并重新向量化。",
+            collection_name,
+            original_filename,
+        )
         handler.delete_document(original_filename, collection_name)
         handler.process_and_embed_document(parsed_content, original_filename, collection_name)
     except Exception as exc:

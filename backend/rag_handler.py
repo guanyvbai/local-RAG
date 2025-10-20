@@ -64,6 +64,12 @@ class RAGHandler:
             self._ensure_collection_exists(collection_name)
     
     def get_answer(self, query: str, chat_history: List[Dict[str, str]]) -> Generator[str, None, None]:
+        truncated_query = query if len(query) <= 60 else f"{query[:57]}..."
+        logger.info(
+            "收到 RAG 查询 '%s'，历史轮数 %d。",
+            truncated_query,
+            len(chat_history),
+        )
         initial_candidates = self.hybrid_retrieve(query, top_k=20)
         if not initial_candidates:
             logger.warning("No candidates found after initial retrieval. Generating answer without context.")
@@ -76,6 +82,10 @@ class RAGHandler:
         
         # 预测得分
         scores = self.reranker.predict(sentence_pairs)
+        logger.info(
+            "对 %d 条候选进行 CrossEncoder 重排序。",
+            len(sentence_pairs)
+        )
         
         # 组合 passage 和 score
         reranked_results = [{"passage": passage, "score": score, "original_doc": initial_candidates[i]} for i, (passage, score) in enumerate(zip(passages, scores))]
@@ -86,6 +96,10 @@ class RAGHandler:
         # 提取前5个结果的 payload
         final_context_payloads = [item['original_doc']['meta'] for item in reranked_results[:5]]
         final_context = [payload.get('parent_content', '') for payload in final_context_payloads]
+        logger.info(
+            "重排序完成，选取前 %d 条上下文用于回答。",
+            len(final_context)
+        )
 
         yield from self.generate_answer(query, final_context, chat_history)
 
@@ -167,16 +181,23 @@ class RAGHandler:
             return False
 
     def hybrid_retrieve(self, query: str, top_k: int = 20) -> List[Dict[str, Any]]:
+        truncated_query = query if len(query) <= 60 else f"{query[:57]}..."
         routed_collection = self.query_router.route_query(query)
-        if not routed_collection: return []
+        if not routed_collection:
+            logger.warning("查询 '%s' 未找到合适的集合，跳过检索。", truncated_query)
+            return []
+        logger.info("查询 '%s' 路由至集合 '%s'，开始混合检索。", truncated_query, routed_collection)
         dense_vector = self._generate_embeddings(query)
-        if not dense_vector: return []
+        if not dense_vector:
+            logger.error("查询 '%s' 未能生成向量表示，无法执行检索。", truncated_query)
+            return []
         dense_hits = self.qdrant_client.search(
             collection_name=routed_collection,
             query_vector=models.NamedVector(name="dense", vector=dense_vector),
             limit=top_k,
             with_payload=True
         )
+        logger.info("密集检索获得 %d 条候选结果。", len(dense_hits))
         sparse_hits = []
         bm25_model = self._load_bm25_model(routed_collection)
         if bm25_model:
@@ -190,6 +211,7 @@ class RAGHandler:
                     limit=top_k,
                     with_payload=True
                 )
+                logger.info("稀疏检索获得 %d 条候选结果。", len(sparse_hits))
             else:
                 logger.warning("Query keywords not found in BM25 vocabulary. Skipping sparse search.")
         else:
@@ -203,18 +225,31 @@ class RAGHandler:
                     "text": hit.payload.get("child_content"),
                     "meta": hit.payload
                 }
+        logger.info("混合检索合并后剩余 %d 条唯一父文档候选。", len(combined_passages))
         return list(combined_passages.values())
 
     def process_and_embed_document(self, parsed_elements: List[ParsedElement], filename: str, collection_name: str):
         self._ensure_collection_exists(collection_name)
+        total_elements = len(parsed_elements) if isinstance(parsed_elements, list) else 'unknown'
+        logger.info(
+            "开始处理文档 '%s' -> 集合 '%s'，输入元素数量: %s。",
+            filename,
+            collection_name,
+            total_elements,
+        )
+        start_time = time.time()
         multi_vector_chunks = create_multi_vector_chunks(parsed_elements, filename)
         if not multi_vector_chunks:
+            logger.warning("文档 '%s' 未生成任何分块，终止向量化流程。", filename)
             return
-        
+
         points_to_upsert = []
+        total_child_chunks = 0
+        embedded_child_chunks = 0
         for parent_chunk, child_chunks in multi_vector_chunks:
             parent_payload = parent_chunk.to_qdrant_payload()
             parent_payload["collection"] = collection_name
+            total_child_chunks += len(child_chunks)
             for child_chunk in child_chunks:
                 dense_vector = self._generate_embeddings(child_chunk.content)
                 if dense_vector:
@@ -223,12 +258,41 @@ class RAGHandler:
                     child_payload["content_type"] = child_chunk.content_type
                     points_to_upsert.append(models.PointStruct(
                         id=child_chunk.chunk_id,
-                        vector={"dense": dense_vector}, 
+                        vector={"dense": dense_vector},
                         payload=child_payload
                     ))
+                    embedded_child_chunks += 1
+                else:
+                    logger.warning(
+                        "文档 '%s' 的子块 '%s' 未能生成有效向量，内容类型: %s。",
+                        filename,
+                        child_chunk.chunk_id,
+                        child_chunk.content_type,
+                    )
         if points_to_upsert:
             self.qdrant_client.upsert(collection_name=collection_name, points=points_to_upsert, wait=True)
+            logger.info(
+                "文档 '%s' 向量化完成：父块 %d 个，子块成功嵌入 %d/%d 个，写入向量 %d 条。",
+                filename,
+                len(multi_vector_chunks),
+                embedded_child_chunks,
+                total_child_chunks,
+                len(points_to_upsert),
+            )
             self._maybe_rebuild_bm25(collection_name)
+            elapsed = time.time() - start_time
+            logger.info(
+                "文档 '%s' 在集合 '%s' 的索引流程耗时 %.2f 秒。",
+                filename,
+                collection_name,
+                elapsed,
+            )
+        else:
+            logger.warning(
+                "文档 '%s' 在集合 '%s' 未产生任何可写入的向量数据，已跳过。",
+                filename,
+                collection_name,
+            )
     
     def _get_bm25_vector_for_query(self, bm25_model: BM25Okapi, query_keywords: List[str]) -> models.SparseVector:
         if not hasattr(bm25_model, 'word_to_id'):
