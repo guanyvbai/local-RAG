@@ -34,8 +34,8 @@ import uuid
 import config
 import auth
 import document_parser
-from rag_handler import rag_handler
-from sql_query_handler import SQLQueryHandler
+from rag_handler import get_rag_handler, get_rag_handler_status
+from sql_query_handler import get_sql_query_handler, get_sql_handler_status
 from cve_handler import cve_handler
 from database import User as DBUser, Chat as DBChat, Message as DBMessage, init_db, get_db
 
@@ -47,17 +47,27 @@ app = FastAPI(title="Intelligent RAG & SQL System")
 UPLOAD_STORAGE_DIR = Path(config.UPLOAD_STORAGE_DIR)
 UPLOAD_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-try:
-    sql_handler = SQLQueryHandler()
-    logger.info("SQLQueryHandler 初始化成功。")
-except Exception as e:
-    sql_handler = None
-    logger.error(f"SQLQueryHandler 初始化失败: {e}", exc_info=True)
-
 @app.on_event("startup")
 def on_startup():
     # 使用 database.py 中的函数初始化数据库
     init_db()
+    logger.info("应用启动完成。RAG 与 SQL 处理器将在首次使用时初始化。")
+
+
+def _require_rag_handler() -> "RAGHandler":
+    try:
+        return get_rag_handler()
+    except Exception as exc:
+        logger.error(f"RAGHandler 初始化失败或未就绪: {exc}")
+        raise HTTPException(status_code=503, detail="RAG 检索服务暂不可用，请稍后再试。")
+
+
+def _require_sql_handler() -> "SQLQueryHandler":
+    try:
+        return get_sql_query_handler()
+    except Exception as exc:
+        logger.error(f"SQLQueryHandler 初始化失败或未就绪: {exc}")
+        raise HTTPException(status_code=503, detail="Text-to-SQL 服务暂不可用，请稍后再试。")
 
 # --- Pydantic 模型定义 ---
 class User(BaseModel):
@@ -130,13 +140,15 @@ async def register(user: UserCreate, db: Session = Depends(get_db)):
 # --- 知识库管理路由 ---
 @app.get("/api/collections", response_model=List[str])
 async def get_collections(current_user: User = Depends(get_current_active_user)):
-    return rag_handler.list_collections()
+    handler = _require_rag_handler()
+    return handler.list_collections()
 
 @app.post("/api/collections/{collection_name}", status_code=status.HTTP_201_CREATED)
 async def create_collection_endpoint(collection_name: str, current_user: User = Depends(get_current_active_user)):
     if not re.match("^[a-zA-Z0-9_-]+$", collection_name):
         raise HTTPException(status_code=400, detail="集合名称只能包含字母、数字、下划线和连字符。")
-    if rag_handler.create_collection(collection_name):
+    handler = _require_rag_handler()
+    if handler.create_collection(collection_name):
         return {"status": "success", "message": f"集合 '{collection_name}' 创建成功。"}
     raise HTTPException(status_code=500, detail=f"创建集合 '{collection_name}' 失败。")
 
@@ -144,19 +156,32 @@ async def create_collection_endpoint(collection_name: str, current_user: User = 
 async def delete_collection_endpoint(collection_name: str, current_user: User = Depends(get_current_active_user)):
     if collection_name == config.QDRANT_COLLECTION_NAME:
          raise HTTPException(status_code=400, detail="不能删除默认集合。")
-    if rag_handler.delete_collection(collection_name):
+    handler = _require_rag_handler()
+    if handler.delete_collection(collection_name):
         return {"status": "success", "message": f"集合 '{collection_name}' 删除成功。"}
     raise HTTPException(status_code=500, detail=f"删除集合 '{collection_name}' 失败。")
 
 @app.get("/api/documents", response_model=List[Dict[str, str]])
 async def get_documents_endpoint(current_user: User = Depends(get_current_active_user)):
-    return rag_handler.list_documents()
+    handler = _require_rag_handler()
+    return handler.list_documents()
 
 @app.delete("/api/documents/{filename}")
 async def delete_document_endpoint(filename: str, collection_name: str = Form(...), current_user: User = Depends(get_current_active_user)):
-    if rag_handler.delete_document(filename, collection_name): 
+    handler = _require_rag_handler()
+    if handler.delete_document(filename, collection_name):
         return {"status": "success"}
     raise HTTPException(status_code=500, detail="Failed to delete document")
+
+
+@app.get("/api/system_status", response_model=Dict[str, Dict[str, Any]])
+async def system_status(current_user: User = Depends(get_current_active_user)):
+    """Expose readiness information for heavy backends."""
+
+    return {
+        "rag": get_rag_handler_status(),
+        "text_to_sql": get_sql_handler_status(),
+    }
 
 def _process_uploaded_document(file_path: Path, original_filename: str, collection_name: str):
     parser = document_parser.get_parser(original_filename)
@@ -172,8 +197,16 @@ def _process_uploaded_document(file_path: Path, original_filename: str, collecti
             logger.error(f"Parsed content empty for '{original_filename}'.")
             return
 
-        rag_handler.delete_document(original_filename, collection_name)
-        rag_handler.process_and_embed_document(parsed_content, original_filename, collection_name)
+        try:
+            handler = get_rag_handler()
+        except Exception as handler_exc:
+            logger.error(
+                f"RAGHandler 未就绪，无法处理后台文档 '{original_filename}': {handler_exc}"
+            )
+            return
+
+        handler.delete_document(original_filename, collection_name)
+        handler.process_and_embed_document(parsed_content, original_filename, collection_name)
     except Exception as exc:
         logger.error(f"Background processing failed for '{original_filename}': {exc}", exc_info=True)
     finally:
@@ -282,6 +315,8 @@ async def rename_chat_endpoint(chat_id: int, request: RenameChatRequest, current
 @app.post("/api/ask")
 async def ask(request: AskRequest, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """处理 RAG 知识库问答请求"""
+    rag_handler_instance = _require_rag_handler()
+
     # Save user message
     user_message = DBMessage(chat_id=request.chat_id, role="user", content=request.question)
     db.add(user_message)
@@ -300,7 +335,7 @@ async def ask(request: AskRequest, current_user: User = Depends(get_current_acti
     def stream_generator():
         full_response = ""
         try:
-            answer_generator = rag_handler.get_answer(request.question, history_for_prompt)
+            answer_generator = rag_handler_instance.get_answer(request.question, history_for_prompt)
             for chunk in answer_generator:
                 full_response += chunk
                 yield chunk
@@ -321,12 +356,11 @@ async def ask(request: AskRequest, current_user: User = Depends(get_current_acti
 @app.post("/api/sql_query", response_class=Response)
 async def sql_query(request: SQLQueryRequest, current_user: User = Depends(get_current_active_user)):
     """处理 Text-to-SQL 请求"""
-    if not sql_handler:
-        raise HTTPException(status_code=500, detail="SQLQueryHandler 未成功初始化。")
-    
+    handler = _require_sql_handler()
+
     logger.info(f"接收到 SQL 查询请求: '{request.question}'")
-    db_schema = sql_handler.get_database_schema()
-    generated_sql = sql_handler.generate_sql_query(request.question, db_schema)
+    db_schema = handler.get_database_schema()
+    generated_sql = handler.generate_sql_query(request.question, db_schema)
     return Response(content=generated_sql, media_type="text/plain")
 
 # --- CPE 漏洞查询路由 ---

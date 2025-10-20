@@ -1,7 +1,7 @@
 # /* 文件名: backend/rag_handler.py, 版本号: 6.0 (SentenceTransformer 替换版) */
 import ollama
 from qdrant_client import QdrantClient, models
-from typing import List, Dict, Union, Generator, Any
+from typing import List, Dict, Union, Generator, Any, Optional
 import logging
 import time
 import os
@@ -15,6 +15,7 @@ import config
 from router import QueryRouter
 from document_parser import ParsedElement
 from chunker import create_multi_vector_chunks
+from threading import RLock
 
 logger = logging.getLogger(__name__)
 
@@ -366,4 +367,41 @@ class RAGHandler:
             logger.error(f"Failed to list documents from Qdrant: {e}")
             return []
 
-rag_handler = RAGHandler()
+_rag_handler_lock = RLock()
+_rag_handler_instance: Optional[RAGHandler] = None
+_rag_handler_error: Optional[BaseException] = None
+
+
+def get_rag_handler(force_refresh: bool = False) -> RAGHandler:
+    global _rag_handler_instance, _rag_handler_error
+
+    if _rag_handler_instance is not None and not force_refresh:
+        return _rag_handler_instance
+
+    with _rag_handler_lock:
+        if _rag_handler_instance is not None and not force_refresh:
+            return _rag_handler_instance
+
+        try:
+            handler = RAGHandler()
+        except Exception as exc:
+            _rag_handler_error = exc
+            logger.error("RAGHandler 初始化失败。", exc_info=True)
+            raise
+        else:
+            _rag_handler_instance = handler
+            _rag_handler_error = None
+            return handler
+
+
+def get_rag_handler_status() -> Dict[str, Any]:
+    """Return current readiness status for monitoring endpoints."""
+
+    error_message = None
+    if _rag_handler_error is not None:
+        error_message = str(_rag_handler_error)
+
+    return {
+        "ready": _rag_handler_instance is not None,
+        "error": error_message,
+    }
