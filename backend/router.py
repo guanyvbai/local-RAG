@@ -3,7 +3,6 @@
 import logging
 from typing import List, Optional
 import openai
-import ollama
 from qdrant_client import QdrantClient, models  # <-- 【核心修正】导入 models
 from sentence_transformers import SentenceTransformer
 import config

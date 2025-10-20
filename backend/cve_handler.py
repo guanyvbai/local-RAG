@@ -11,17 +11,17 @@ import uuid
 import os
 import re
 from typing import List, Dict, Any
-import ollama
 from qdrant_client import QdrantClient, models
 
 import config
+from ollama_client import get_ollama_client
 
 logger = logging.getLogger(__name__)
 
 class CVEHandler:
     def __init__(self):
         self.qdrant_client = QdrantClient(url=config.QDRANT_URL)
-        self.embedding_client = ollama.Client(host=config.OLLAMA_BASE_URL)
+        self.embedding_client = get_ollama_client()
         self.embedding_model_name = config.EMBEDDING_MODEL_NAME
         
         try:
