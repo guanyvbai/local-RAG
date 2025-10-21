@@ -5,7 +5,7 @@ import logging
 import time
 import os
 import pickle
-from collections import defaultdict
+from collections import defaultdict, Counter
 from rank_bm25 import BM25Okapi
 # --- 【核心替换】导入 CrossEncoder ---
 from sentence_transformers import CrossEncoder
@@ -34,20 +34,29 @@ class RAGHandler:
         self.llm_client = self.embedding_client
         
         # --- 【核心替换】加载 sentence-transformers CrossEncoder 模型 ---
-        model_path = "/app/models/cross-encoder" # 对应 docker-compose.yml 的挂载路径
+        self.reranker = None
+        self.reranker_enabled = False
+        model_path = getattr(config, "RERANK_MODEL_PATH", "/app/models/reranker")
         logger.info(f"准备从本地路径加载 CrossEncoder Reranker 模型: {model_path}")
 
-        if not os.path.isdir(model_path):
-            logger.error(f"‼️ 致命错误: Reranker 模型路径 '{model_path}' 不存在或不是一个目录！")
-            raise RuntimeError(f"Reranker 模型路径无效: {model_path}")
-
-        try:
-            # 直接从本地文件夹路径加载模型
-            self.reranker = CrossEncoder(model_path)
-            logger.info("✅ 成功从本地路径加载 CrossEncoder reranker 模型。")
-        except Exception as e:
-            logger.exception(f"‼️ Reranker 模型加载失败: {e}")
-            raise RuntimeError("Reranker 初始化失败")
+        if os.path.isdir(model_path):
+            try:
+                # 直接从本地文件夹路径加载模型
+                self.reranker = CrossEncoder(model_path)
+            except Exception as e:
+                logger.warning(
+                    "Reranker 模型加载失败: %s，将降级为仅使用向量相似度排序。",
+                    e,
+                    exc_info=True,
+                )
+            else:
+                self.reranker_enabled = True
+                logger.info("✅ 成功从本地路径加载 CrossEncoder reranker 模型。")
+        else:
+            logger.warning(
+                "Reranker 模型路径 '%s' 不存在或不可访问，将跳过重排序流程。",
+                model_path,
+            )
 
         self.query_router = QueryRouter(
             qdrant_client=self.qdrant_client,
@@ -56,6 +65,7 @@ class RAGHandler:
         )
         
         self.bm25_models_cache = {}
+        self.bm25_metadata = {}
         self._bm25_pending_counts = defaultdict(int)
         self._bm25_last_rebuild = {collection: time.time() for collection in config.AVAILABLE_COLLECTIONS}
         self.bm25_rebuild_threshold = getattr(config, "BM25_REBUILD_THRESHOLD", 5)
@@ -76,75 +86,226 @@ class RAGHandler:
             yield from self.generate_answer(query, [], chat_history)
             return
 
-        # --- 【核心替换】使用 CrossEncoder 进行 Rerank ---
-        passages = [item['text'] for item in initial_candidates]
-        sentence_pairs = [[query, passage] for passage in passages]
-        
-        # 预测得分
-        scores = self.reranker.predict(sentence_pairs)
-        logger.info(
-            "对 %d 条候选进行 CrossEncoder 重排序。",
-            len(sentence_pairs)
-        )
-        
-        # 组合 passage 和 score
-        reranked_results = [{"passage": passage, "score": score, "original_doc": initial_candidates[i]} for i, (passage, score) in enumerate(zip(passages, scores))]
-        
-        # 按分数降序排序
-        reranked_results.sort(key=lambda x: x['score'], reverse=True)
-        
-        # 提取前5个结果的 payload
-        final_context_payloads = [item['original_doc']['meta'] for item in reranked_results[:5]]
-        final_context = [payload.get('parent_content', '') for payload in final_context_payloads]
-        logger.info(
-            "重排序完成，选取前 %d 条上下文用于回答。",
-            len(final_context)
-        )
+        final_context: List[str]
+        if self.reranker_enabled and self.reranker is not None:
+            # --- 【核心替换】使用 CrossEncoder 进行 Rerank ---
+            passages = [item['text'] for item in initial_candidates]
+            sentence_pairs = [[query, passage] for passage in passages]
+
+            # 预测得分
+            scores = self.reranker.predict(sentence_pairs)
+            logger.info(
+                "对 %d 条候选进行 CrossEncoder 重排序。",
+                len(sentence_pairs)
+            )
+
+            # 组合 passage 和 score
+            reranked_results = [
+                {
+                    "passage": passage,
+                    "score": score,
+                    "original_doc": initial_candidates[i]
+                }
+                for i, (passage, score) in enumerate(zip(passages, scores))
+            ]
+
+            # 按分数降序排序
+            reranked_results.sort(key=lambda x: x['score'], reverse=True)
+
+            # 提取前5个结果的 payload
+            final_context_payloads = [item['original_doc']['meta'] for item in reranked_results[:5]]
+            final_context = [payload.get('parent_content', '') for payload in final_context_payloads if payload]
+            logger.info(
+                "重排序完成，选取前 %d 条上下文用于回答。",
+                len(final_context)
+            )
+        else:
+            logger.info("Reranker 未启用，直接使用向量相似度 Top-K 结果。")
+            final_context = [
+                item.get('meta', {}).get('parent_content', '')
+                for item in initial_candidates[:5]
+            ]
 
         yield from self.generate_answer(query, final_context, chat_history)
 
     def _get_bm25_model_path(self, collection_name: str) -> str:
         return os.path.join(BM25_MODELS_DIR, f"{collection_name}_bm25.pkl")
 
-    def _load_bm25_model(self, collection_name: str) -> BM25Okapi:
+    def _load_bm25_model(self, collection_name: str) -> Optional[BM25Okapi]:
         if collection_name in self.bm25_models_cache:
-            return self.bm25_models_cache[collection_name]
+            model = self.bm25_models_cache[collection_name]
+            self._prepare_bm25_metadata(collection_name, model)
+            return model
         model_path = self._get_bm25_model_path(collection_name)
         if os.path.exists(model_path):
             with open(model_path, "rb") as f:
                 logger.info(f"Loading BM25 model for collection '{collection_name}' from disk.")
                 model = pickle.load(f)
                 self.bm25_models_cache[collection_name] = model
+                self._prepare_bm25_metadata(collection_name, model)
                 return model
         return None
 
     def _save_bm25_model(self, collection_name: str, model: BM25Okapi):
         self.bm25_models_cache[collection_name] = model
+        self._prepare_bm25_metadata(collection_name, model)
         model_path = self._get_bm25_model_path(collection_name)
         with open(model_path, "wb") as f:
             logger.info(f"Saving BM25 model for collection '{collection_name}' to disk.")
             pickle.dump(model, f)
     
+    def _prepare_bm25_metadata(self, collection_name: str, model: BM25Okapi):
+        if not isinstance(model.idf, dict):
+            return
+        if hasattr(model, "word_to_id") and isinstance(getattr(model, "word_to_id", None), dict):
+            word_to_id = dict(model.word_to_id)
+        else:
+            word_to_id = {word: idx for idx, word in enumerate(model.idf.keys())}
+            model.word_to_id = word_to_id
+        avgdl = getattr(model, "avgdl", 0) or 1.0
+        metadata = {
+            "word_to_id": word_to_id,
+            "idf": dict(model.idf),
+            "avgdl": float(avgdl),
+            "k1": float(getattr(model, "k1", 1.5)),
+            "b": float(getattr(model, "b", 0.75)),
+        }
+        self.bm25_metadata[collection_name] = metadata
+        return metadata
+
+    def _get_bm25_metadata(self, collection_name: str) -> Optional[Dict[str, Any]]:
+        metadata = self.bm25_metadata.get(collection_name)
+        if metadata:
+            return metadata
+        model = self._load_bm25_model(collection_name)
+        if model is None:
+            return None
+        return self.bm25_metadata.get(collection_name)
+
+    def _tokenize_text(self, text: str) -> List[str]:
+        return str(text).split()
+
+    def _build_bm25_sparse_vector(self, collection_name: str, tokens: List[str]) -> Optional[models.SparseVector]:
+        metadata = self._get_bm25_metadata(collection_name)
+        if not metadata or not tokens:
+            return None
+        word_to_id = metadata["word_to_id"]
+        idf = metadata["idf"]
+        avgdl = metadata["avgdl"] or 1.0
+        k1 = metadata["k1"]
+        b = metadata["b"]
+
+        term_counts = Counter(token for token in tokens if token in word_to_id)
+        if not term_counts:
+            return None
+
+        doc_len = len(tokens)
+        indices = []
+        values = []
+        normalization = 1 - b + b * (doc_len / avgdl)
+        for term, tf in term_counts.items():
+            idf_value = idf.get(term)
+            if idf_value is None:
+                continue
+            denominator = tf + k1 * normalization
+            if denominator == 0:
+                continue
+            weight = (tf * (k1 + 1)) / denominator
+            if weight <= 0:
+                continue
+            indices.append(word_to_id[term])
+            values.append(weight)
+
+        if not indices:
+            return None
+
+        return models.SparseVector(indices=indices, values=values)
+
     def _rebuild_bm25_model_for_collection(self, collection_name: str):
         logger.info(f"Rebuilding BM25 model for collection '{collection_name}'...")
         try:
-            all_child_docs = []
+            tokenized_corpus = []
+            point_records = []
             scroll_result, next_page = self.qdrant_client.scroll(
-                collection_name=collection_name, limit=1000, with_payload=["child_content"]
+                collection_name=collection_name,
+                limit=512,
+                with_payload=["child_content"],
+                with_vectors=True,
             )
             while scroll_result:
-                all_child_docs.extend([hit.payload['child_content'] for hit in scroll_result if hit.payload.get('child_content')])
+                for hit in scroll_result:
+                    payload = hit.payload or {}
+                    text = payload.get('child_content')
+                    if not text:
+                        continue
+                    tokens = self._tokenize_text(text)
+                    if not tokens:
+                        continue
+                    tokenized_corpus.append(tokens)
+                    point_records.append({
+                        "id": hit.id,
+                        "tokens": tokens,
+                        "payload": payload,
+                        "vector": hit.vector,
+                    })
                 if not next_page:
                     break
                 scroll_result, next_page = self.qdrant_client.scroll(
-                    collection_name=collection_name, limit=1000, with_payload=["child_content"], offset=next_page
+                    collection_name=collection_name,
+                    limit=512,
+                    with_payload=["child_content"],
+                    with_vectors=True,
+                    offset=next_page
                 )
-            
-            if all_child_docs:
-                tokenized_corpus = [doc.split() for doc in all_child_docs]
+
+            if tokenized_corpus:
                 bm25 = BM25Okapi(tokenized_corpus)
                 self._save_bm25_model(collection_name, bm25)
-                logger.info(f"Successfully rebuilt and saved BM25 model for '{collection_name}' with {len(all_child_docs)} documents.")
+                logger.info(
+                    "Successfully rebuilt and saved BM25 model for '%s' with %d documents.",
+                    collection_name,
+                    len(tokenized_corpus)
+                )
+
+                updated_points = []
+                for record in point_records:
+                    sparse_vector = self._build_bm25_sparse_vector(collection_name, record["tokens"])
+                    if not sparse_vector:
+                        continue
+                    vector_field = record.get("vector")
+                    if vector_field is None:
+                        continue
+                    if isinstance(vector_field, dict):
+                        vector_payload = dict(vector_field)
+                    else:
+                        vector_payload = {"dense": vector_field}
+                    vector_payload["bm25"] = sparse_vector
+                    updated_points.append(
+                        models.PointStruct(
+                            id=record["id"],
+                            vector=vector_payload,
+                            payload=record.get("payload"),
+                        )
+                    )
+                    if len(updated_points) >= 256:
+                        self.qdrant_client.upsert(
+                            collection_name=collection_name,
+                            points=updated_points,
+                            wait=True,
+                        )
+                        updated_points = []
+
+                if updated_points:
+                    self.qdrant_client.upsert(
+                        collection_name=collection_name,
+                        points=updated_points,
+                        wait=True,
+                    )
+                logger.info(
+                    "已为集合 '%s' 回填 %d 条稀疏向量。",
+                    collection_name,
+                    len(point_records)
+                )
             else:
                 logger.warning(f"No documents found in '{collection_name}' to build BM25 model.")
         except Exception as e:
@@ -199,11 +360,11 @@ class RAGHandler:
         )
         logger.info("密集检索获得 %d 条候选结果。", len(dense_hits))
         sparse_hits = []
-        bm25_model = self._load_bm25_model(routed_collection)
-        if bm25_model:
+        metadata = self._get_bm25_metadata(routed_collection)
+        if metadata:
             logger.info(f"Found BM25 model for '{routed_collection}'. Performing sparse search.")
             query_keywords = query.split()
-            sparse_vector = self._get_bm25_vector_for_query(bm25_model, query_keywords)
+            sparse_vector = self._get_bm25_vector_for_query(routed_collection, query_keywords)
             if sparse_vector.indices:
                 sparse_hits = self.qdrant_client.search(
                     collection_name=routed_collection,
@@ -252,13 +413,18 @@ class RAGHandler:
             total_child_chunks += len(child_chunks)
             for child_chunk in child_chunks:
                 dense_vector = self._generate_embeddings(child_chunk.content)
+                tokens = self._tokenize_text(child_chunk.content)
+                sparse_vector = self._build_bm25_sparse_vector(collection_name, tokens)
                 if dense_vector:
                     child_payload = parent_payload.copy()
                     child_payload["child_content"] = child_chunk.content
                     child_payload["content_type"] = child_chunk.content_type
+                    vector_payload = {"dense": dense_vector}
+                    if sparse_vector:
+                        vector_payload["bm25"] = sparse_vector
                     points_to_upsert.append(models.PointStruct(
                         id=child_chunk.chunk_id,
-                        vector={"dense": dense_vector},
+                        vector=vector_payload,
                         payload=child_payload
                     ))
                     embedded_child_chunks += 1
@@ -294,11 +460,26 @@ class RAGHandler:
                 collection_name,
             )
     
-    def _get_bm25_vector_for_query(self, bm25_model: BM25Okapi, query_keywords: List[str]) -> models.SparseVector:
-        if not hasattr(bm25_model, 'word_to_id'):
-            bm25_model.word_to_id = {word: i for i, word in enumerate(bm25_model.idf)}
-        indices = [bm25_model.word_to_id[word] for word in query_keywords if word in bm25_model.word_to_id]
-        values = [bm25_model.idf[word] for word in query_keywords if word in bm25_model.word_to_id]
+    def _get_bm25_vector_for_query(self, collection_name: str, query_keywords: List[str]) -> models.SparseVector:
+        metadata = self._get_bm25_metadata(collection_name)
+        if not metadata:
+            return models.SparseVector(indices=[], values=[])
+        word_to_id = metadata["word_to_id"]
+        idf = metadata["idf"]
+        indices = []
+        values = []
+        seen = set()
+        for word in query_keywords:
+            if word in seen:
+                continue
+            seen.add(word)
+            if word not in word_to_id:
+                continue
+            idf_value = idf.get(word)
+            if idf_value is None:
+                continue
+            indices.append(word_to_id[word])
+            values.append(idf_value)
         return models.SparseVector(indices=indices, values=values)
 
     def delete_collection(self, collection_name: str) -> bool:
