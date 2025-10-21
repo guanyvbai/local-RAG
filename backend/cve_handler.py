@@ -50,7 +50,7 @@ class CVEHandler:
             logger.warning(f"集合 '{self.collection_name}' 不存在，将自动创建。")
             self.qdrant_client.recreate_collection(
                 collection_name=self.collection_name,
-                vectors_config=models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)
+                vectors_config={"dense": models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)}
             )
             self.qdrant_client.create_payload_index(
                 collection_name=self.collection_name,
