@@ -1,4 +1,4 @@
-# /* 文件名: backend/app.py, 版本号: 3.0 (MySQL 迁移版) */
+# /* 文件名: backend/app.py, 版本号: 3.1 (MySQL 迁移版) */
 """
 FastAPI 主应用程序文件。
 【V3.0 更新】:
