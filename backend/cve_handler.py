@@ -51,6 +51,7 @@ class CVEHandler:
             logger.warning(f"集合 '{self.collection_name}' 不存在，将自动创建。")
             self.qdrant_client.recreate_collection(
                 collection_name=self.collection_name,
+
                 vectors_config={
                     "dense": models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)
                 }
