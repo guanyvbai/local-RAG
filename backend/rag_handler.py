@@ -1,4 +1,18 @@
 # /* 文件名: backend/rag_handler.py, 版本号: 6.0 (SentenceTransformer 替换版) */
+"""Runtime orchestration for Retrieval-Augmented Generation (RAG).
+
+该模块集中处理 RAG 流程中最核心的职责：
+
+* 初始化向量检索、稀疏检索 (BM25) 以及重排序 (CrossEncoder) 所需的所有
+  客户端与模型。
+* 提供检索与答案生成的统一入口，供 FastAPI 路由调用。
+* 负责将解析后的文档分块、嵌入并写入 Qdrant，以便后续检索。
+* 在索引更新后按需重建 BM25 模型，保持稀疏检索效果。
+
+为了方便后续维护，本文件为关键类和辅助函数补充了详细的文档字符串，
+逐步说明每个步骤的作用和约束条件，使 RAG 的执行顺序一目了然。
+"""
+
 from qdrant_client import QdrantClient, models
 from typing import List, Dict, Union, Generator, Any, Optional
 import logging
@@ -24,9 +38,23 @@ os.makedirs(BM25_MODELS_DIR, exist_ok=True)
 
 
 class RAGHandler:
+    """End-to-end coordinator for the hybrid retrieval and answer generation flow."""
+
     def __init__(self):
+        """Initialise vector stores, reranker, routing helpers and caches.
+
+        该初始化过程会立即验证依赖是否就绪（例如：Qdrant、CrossEncoder 模型
+        目录、Ollama 服务等），从而在应用启动时就捕获潜在的配置问题。完成
+        初始化后，实例会持有：
+
+        * ``self.qdrant_client``：对向量数据库的访问。
+        * ``self.embedding_client``：用于生成 dense 向量与回答的 Ollama 客户端。
+        * ``self.reranker``：基于 CrossEncoder 的交叉编码器，用于重排序候选文档。
+        * ``self.query_router``：根据语义或 LLM 结果选择集合。
+        * 各种缓存字段（BM25 模型、重建计数等）。
+        """
         self.qdrant_client = QdrantClient(url=config.QDRANT_URL)
-        
+
         self.embedding_client = get_ollama_client()
         logger.info(f"使用Ollama嵌入模型: {config.EMBEDDING_MODEL_NAME}")
         self.embedding_dim = self._get_ollama_embedding_dimension()
@@ -62,8 +90,18 @@ class RAGHandler:
         self.bm25_rebuild_interval = getattr(config, "BM25_REBUILD_INTERVAL_SECONDS", 300)
         for collection_name in config.AVAILABLE_COLLECTIONS:
             self._ensure_collection_exists(collection_name)
-    
+
     def get_answer(self, query: str, chat_history: List[Dict[str, str]]) -> Generator[str, None, None]:
+        """Stream an answer for *query* using hybrid retrieval and re-ranking.
+
+        步骤概览：
+        1. 调用 :meth:`hybrid_retrieve` 获得 dense + sparse 的候选文档。
+        2. 使用 CrossEncoder 计算每个候选的相关性分数并降序排列。
+        3. 取前若干段上下文，交给 :meth:`generate_answer` 构造最终回复。
+
+        返回值是一个生成器，以流式的形式向 FastAPI 端点逐块输出响应，便于
+        前端实时展示。
+        """
         truncated_query = query if len(query) <= 60 else f"{query[:57]}..."
         logger.info(
             "收到 RAG 查询 '%s'，历史轮数 %d。",
@@ -229,6 +267,17 @@ class RAGHandler:
         return list(combined_passages.values())
 
     def process_and_embed_document(self, parsed_elements: List[ParsedElement], filename: str, collection_name: str):
+        """Index a parsed document into Qdrant and update auxiliary caches.
+
+        *parsed_elements* 应该来自 ``document_parser``，其中的父子分块逻辑由
+        :func:`chunker.create_multi_vector_chunks` 负责。该方法主要承担以下任务：
+
+        - 为每个父块/子块生成 dense 向量并写入 Qdrant。
+        - 在成功写入后调用 :meth:`_maybe_rebuild_bm25`，以便按需更新稀疏索引。
+
+        当没有任何可嵌入的数据时，会记录警告并提前返回，避免对 Qdrant 进行
+        空写入操作。
+        """
         self._ensure_collection_exists(collection_name)
         total_elements = len(parsed_elements) if isinstance(parsed_elements, list) else 'unknown'
         logger.info(
@@ -331,6 +380,7 @@ class RAGHandler:
         self._maybe_rebuild_bm25(collection_name, force=True)
 
     def _maybe_rebuild_bm25(self, collection_name: str, force: bool = False):
+        """Rebuild the BM25 model based on update frequency and elapsed time."""
         if force:
             self._rebuild_bm25_model_for_collection(collection_name)
             self._bm25_pending_counts[collection_name] = 0
@@ -381,6 +431,7 @@ class RAGHandler:
         return messages
 
     def _generate_ollama(self, messages: List[Dict[str, str]]):
+        """Yield incremental response chunks from the Ollama chat endpoint."""
         stream = self.llm_client.chat(model=config.OLLAMA_MODEL_NAME, messages=messages, stream=True)
         for chunk in stream:
             content = chunk['message']['content']
