@@ -193,7 +193,7 @@ class CVEHandler:
                 }
                 points_to_upsert.append(models.PointStruct(
                     id=cve_id,
-                    vector={"dense": vector},
+                    vector=vector,
                     payload=payload
                 ))
             
