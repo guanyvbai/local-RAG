@@ -1,10 +1,16 @@
 # /* 文件名: backend/app.py, 版本号: 3.0 (MySQL 迁移版) */
-"""
-FastAPI 主应用程序文件。
-【V3.0 更新】:
-- 移除了所有 sqlite3 相关的代码。
-- 引入了新的 database.py 模块来处理所有用户、对话和消息的数据库操作。
-- 所有相关的数据库操作都已重构为使用 SQLAlchemy ORM 和 MySQL。
+"""backend.app
+=================
+
+应用入口点，负责装配 FastAPI 对象、注册依赖与路由，并协调 RAG、Text-to-SQL
+以及漏洞查询等子系统。模块级注释主要用于补充项目历史背景，以帮助后来者
+快速了解为何存在某些初始化步骤。
+
+【V3.0 更新】
+----------------
+* 移除了所有 SQLite 相关代码，全部迁移到 MySQL。
+* 引入 :mod:`database` 模块集中管理 ORM 模型、会话与初始化逻辑。
+* 将遗留的原始 SQL 操作替换为 SQLAlchemy ORM，简化事务管理。
 """
 
 # 1. 首先进行日志配置
@@ -49,12 +55,16 @@ UPLOAD_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 @app.on_event("startup")
 def on_startup():
+    """在 FastAPI 生命周期开始时执行一次数据库初始化。"""
+
     # 使用 database.py 中的函数初始化数据库
     init_db()
     logger.info("应用启动完成。RAG 与 SQL 处理器将在首次使用时初始化。")
 
 
 def _require_rag_handler() -> "RAGHandler":
+    """懒加载 RAG 处理器，在失败时返回统一的 503 响应。"""
+
     try:
         return get_rag_handler()
     except Exception as exc:
@@ -63,6 +73,8 @@ def _require_rag_handler() -> "RAGHandler":
 
 
 def _require_sql_handler() -> "SQLQueryHandler":
+    """在访问 Text-to-SQL 能力前验证处理器的就绪状态。"""
+
     try:
         return get_sql_query_handler()
     except Exception as exc:
@@ -71,38 +83,56 @@ def _require_sql_handler() -> "SQLQueryHandler":
 
 # --- Pydantic 模型定义 ---
 class User(BaseModel):
+    """经过认证的轻量用户信息。"""
+
     id: int
     username: str
 
 class Token(BaseModel):
+    """标准 OAuth2 Bearer token 响应模型。"""
+
     access_token: str
     token_type: str
 
 class AskRequest(BaseModel):
+    """RAG 对话请求的载荷。"""
+
     question: str
     chat_id: int
 
 class SQLQueryRequest(BaseModel):
+    """Text-to-SQL 查询请求体。"""
+
     question: str
 
 class CPELookupRequest(BaseModel):
+    """CVE 查询接口使用的 CPE 条目。"""
+
     cpe: str
 
 class CVELookupRequest(BaseModel):
     cve_id: str
 
 class NVDLoadRequest(BaseModel):
+    """触发 NVD 离线数据加载任务时使用的路径信息。"""
+
     directory_path: str = "/app/data/nvd_data"
 
 class UserCreate(BaseModel):
+    """注册流程使用的表单字段约束。"""
+
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=6)
 
 class RenameChatRequest(BaseModel):
+    """重命名现有对话时提交的新标题。"""
+
     new_title: str
 
 # --- 认证依赖 ---
 async def get_current_active_user(token: str = Depends(auth.oauth2_scheme), db: Session = Depends(get_db)) -> User:
+    """解析访问令牌并返回数据库中的完整用户对象。"""
+
     payload = auth.decode_access_token(token)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
@@ -121,6 +151,8 @@ async def get_current_active_user(token: str = Depends(auth.oauth2_scheme), db: 
 # --- 认证路由 ---
 @app.post("/api/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """通过用户名密码交换访问令牌。"""
+
     user = db.query(DBUser).filter(DBUser.username == form_data.username).first()
     if not user or not auth.verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
@@ -129,6 +161,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
 
 @app.post("/api/register", status_code=status.HTTP_201_CREATED)
 async def register(user: UserCreate, db: Session = Depends(get_db)):
+    """创建一个新的平台用户。"""
+
     db_user = db.query(DBUser).filter(DBUser.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
@@ -143,11 +177,15 @@ async def register(user: UserCreate, db: Session = Depends(get_db)):
 # --- 知识库管理路由 ---
 @app.get("/api/collections", response_model=List[str])
 async def get_collections(current_user: User = Depends(get_current_active_user)):
+    """列出当前可用的向量集合名称。"""
+
     handler = _require_rag_handler()
     return handler.list_collections()
 
 @app.post("/api/collections/{collection_name}", status_code=status.HTTP_201_CREATED)
 async def create_collection_endpoint(collection_name: str, current_user: User = Depends(get_current_active_user)):
+    """新建一个供 RAG 使用的向量集合。"""
+
     if not re.match("^[a-zA-Z0-9_-]+$", collection_name):
         raise HTTPException(status_code=400, detail="集合名称只能包含字母、数字、下划线和连字符。")
     handler = _require_rag_handler()
@@ -157,6 +195,8 @@ async def create_collection_endpoint(collection_name: str, current_user: User = 
 
 @app.delete("/api/collections/{collection_name}", status_code=status.HTTP_200_OK)
 async def delete_collection_endpoint(collection_name: str, current_user: User = Depends(get_current_active_user)):
+    """删除指定集合，默认集合除外。"""
+
     if collection_name == config.QDRANT_COLLECTION_NAME:
          raise HTTPException(status_code=400, detail="不能删除默认集合。")
     handler = _require_rag_handler()
@@ -166,11 +206,15 @@ async def delete_collection_endpoint(collection_name: str, current_user: User = 
 
 @app.get("/api/documents", response_model=List[Dict[str, str]])
 async def get_documents_endpoint(current_user: User = Depends(get_current_active_user)):
+    """返回知识库中文档的元信息。"""
+
     handler = _require_rag_handler()
     return handler.list_documents()
 
 @app.delete("/api/documents/{filename}")
 async def delete_document_endpoint(filename: str, collection_name: str = Form(...), current_user: User = Depends(get_current_active_user)):
+    """移除集合内的指定文档。"""
+
     handler = _require_rag_handler()
     if handler.delete_document(filename, collection_name):
         return {"status": "success"}
@@ -187,6 +231,8 @@ async def system_status(current_user: User = Depends(get_current_active_user)):
     }
 
 def _process_uploaded_document(file_path: Path, original_filename: str, collection_name: str):
+    """后台任务：解析、分块并向量化上传的文档。"""
+
     logger.info(
         "开始后台处理上传文件 '%s'，目标集合 '%s'。临时文件: %s",
         original_filename,
@@ -238,6 +284,8 @@ def _process_uploaded_document(file_path: Path, original_filename: str, collecti
 
 
 async def _save_upload_to_disk(upload: UploadFile, destination: Path) -> int:
+    """将上传内容写入磁盘并返回写入字节数。"""
+
     logger.info("开始保存上传文件 '%s' 到本地路径 %s。", upload.filename, destination)
     total_written = 0
     with destination.open("wb") as buffer:
@@ -263,6 +311,8 @@ async def upload_endpoint(
     collection_name: str = Form(...),
     current_user: User = Depends(get_current_active_user)
 ):
+    """接收用户上传的文件并调度后台解析任务。"""
+
     logger.info(
         "用户 '%s' 请求上传文件 '%s' 到集合 '%s'。",
         current_user.username,
@@ -305,15 +355,21 @@ async def upload_endpoint(
 # --- 聊天与工作流路由 ---
 @app.get("/api/workflows", response_model=List[Dict])
 async def get_workflows(current_user: User = Depends(get_current_active_user)):
+    """返回前端可展示的内置工作流列表。"""
+
     return config.AVAILABLE_WORKFLOWS
 
 @app.get("/api/chats", response_model=List[Dict])
 async def get_chats(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """列出当前用户的所有对话元数据。"""
+
     chats = db.query(DBChat).filter(DBChat.user_id == current_user.id).order_by(DBChat.created_at.desc()).all()
     return [{"id": chat.id, "title": chat.title, "created_at": chat.created_at} for chat in chats]
 
 @app.post("/api/chats", response_model=Dict)
 async def create_chat(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """为当前用户创建一条新的对话记录。"""
+
     new_chat = DBChat(user_id=current_user.id, title="新的对话")
     db.add(new_chat)
     db.commit()
@@ -322,6 +378,8 @@ async def create_chat(current_user: User = Depends(get_current_active_user), db:
 
 @app.get("/api/chats/{chat_id}", response_model=List[Dict])
 async def get_messages(chat_id: int, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """检索指定对话下的所有消息按时间排序。"""
+
     chat = db.query(DBChat).filter(DBChat.id == chat_id, DBChat.user_id == current_user.id).first()
     if not chat:
         return []
@@ -330,6 +388,8 @@ async def get_messages(chat_id: int, current_user: User = Depends(get_current_ac
 
 @app.post("/api/chats/{chat_id}/messages")
 async def add_message_to_chat(chat_id: int, message: Dict, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """将任意角色的消息持久化到指定对话中。"""
+
     chat = db.query(DBChat).filter(DBChat.id == chat_id, DBChat.user_id == current_user.id).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -347,6 +407,8 @@ async def add_message_to_chat(chat_id: int, message: Dict, current_user: User = 
 
 @app.delete("/api/chats/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_chat_endpoint(chat_id: int, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """软删除策略未启用，因此直接删除整条对话记录。"""
+
     chat = db.query(DBChat).filter(DBChat.id == chat_id, DBChat.user_id == current_user.id).first()
     if chat:
         db.delete(chat)
@@ -355,6 +417,8 @@ async def delete_chat_endpoint(chat_id: int, current_user: User = Depends(get_cu
 
 @app.put("/api/chats/{chat_id}/rename")
 async def rename_chat_endpoint(chat_id: int, request: RenameChatRequest, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """更新对话标题，供前端列表展示。"""
+
     chat = db.query(DBChat).filter(DBChat.id == chat_id, DBChat.user_id == current_user.id).first()
     if chat:
         chat.title = request.new_title
@@ -401,6 +465,8 @@ async def ask(request: AskRequest, current_user: User = Depends(get_current_acti
     )
 
     def stream_generator():
+        """惰性生成答案并在完成后存储消息历史。"""
+
         full_response = ""
         try:
             answer_generator = rag_handler_instance.get_answer(request.question, history_for_prompt)
@@ -439,6 +505,8 @@ async def sql_query(request: SQLQueryRequest, current_user: User = Depends(get_c
 # --- CPE 漏洞查询路由 ---
 @app.post("/api/cve_lookup", response_model=List[Dict[str, Any]])
 async def cve_lookup(request: CPELookupRequest, current_user: User = Depends(get_current_active_user)):
+    """根据 CPE 字符串检索相关漏洞条目。"""
+
     return cve_handler.search_vulnerabilities_by_cpe(request.cpe)
 
 @app.post("/api/cpe_lookup_by_cve", response_model=List[Dict[str, Any]])
@@ -447,6 +515,8 @@ async def cpe_lookup_by_cve(request: CVELookupRequest, current_user: User = Depe
 
 @app.post("/api/load_nvd_data")
 async def load_nvd_data(request: NVDLoadRequest, current_user: User = Depends(get_current_active_user)):
+    """从指定目录批量加载 NVD JSON 数据。"""
+
     directory_path = request.directory_path
     if not os.path.isdir(directory_path):
         raise HTTPException(status_code=404, detail=f"目录未找到: {directory_path}")
@@ -463,6 +533,8 @@ async def load_nvd_data(request: NVDLoadRequest, current_user: User = Depends(ge
 # --- 前端页面服务 ---
 @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
 async def serve_frontend(request: Request, full_path: str):
+    """根据路径返回打包后的静态页面或入口文件。"""
+
     base_dir = config.FRONTEND_DIR
     path = full_path.strip() or "index.html"
     
