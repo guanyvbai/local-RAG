@@ -88,6 +88,9 @@ class SQLQueryRequest(BaseModel):
 class CPELookupRequest(BaseModel):
     cpe: str
 
+class CVELookupRequest(BaseModel):
+    cve_id: str
+
 class NVDLoadRequest(BaseModel):
     directory_path: str = "/app/data/nvd_data"
 
@@ -437,6 +440,10 @@ async def sql_query(request: SQLQueryRequest, current_user: User = Depends(get_c
 @app.post("/api/cve_lookup", response_model=List[Dict[str, Any]])
 async def cve_lookup(request: CPELookupRequest, current_user: User = Depends(get_current_active_user)):
     return cve_handler.search_vulnerabilities_by_cpe(request.cpe)
+
+@app.post("/api/cpe_lookup_by_cve", response_model=List[Dict[str, Any]])
+async def cpe_lookup_by_cve(request: CVELookupRequest, current_user: User = Depends(get_current_active_user)):
+    return cve_handler.search_cpes_by_cve(request.cve_id)
 
 @app.post("/api/load_nvd_data")
 async def load_nvd_data(request: NVDLoadRequest, current_user: User = Depends(get_current_active_user)):
