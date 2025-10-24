@@ -51,7 +51,10 @@ class CVEHandler:
             logger.warning(f"集合 '{self.collection_name}' 不存在，将自动创建。")
             self.qdrant_client.recreate_collection(
                 collection_name=self.collection_name,
-                vectors_config=models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)
+
+                vectors_config={
+                    "dense": models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)
+                }
             )
         for field_name in ["cve_id", "cpes", "cpe_cores", "vendor", "product", "part"]:
             try:
@@ -193,7 +196,7 @@ class CVEHandler:
                 }
                 points_to_upsert.append(models.PointStruct(
                     id=cve_id,
-                    vector=vector,
+                    vector={"dense": vector},
                     payload=payload
                 ))
             
