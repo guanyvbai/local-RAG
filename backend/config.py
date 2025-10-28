@@ -6,7 +6,7 @@ load_dotenv()
 
 # --- General Settings ---
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-FRONTEND_DIR = os.path.join(ROOT_DIR, 'frontend')
+FRONTEND_DIR = "/app/frontend"
 
 # --- Workflows ---
 AVAILABLE_WORKFLOWS = [

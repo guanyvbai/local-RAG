@@ -1,4 +1,4 @@
-# /* 文件名: backend/rag_handler.py, 版本号: 6.0 (SentenceTransformer 替换版) */
+# /* 文件名: backend/rag_handler.py, 版本号: 61 (SentenceTransformer 替换版) */
 from qdrant_client import QdrantClient, models
 from typing import List, Dict, Union, Generator, Any, Optional
 import logging
@@ -10,11 +10,11 @@ from rank_bm25 import BM25Okapi
 # --- 【核心替换】导入 CrossEncoder ---
 from sentence_transformers import CrossEncoder
 import shutil
-import config
-from router import QueryRouter
-from document_parser import ParsedElement
-from chunker import create_multi_vector_chunks
-from ollama_client import get_ollama_client
+from backend import config
+from backend.router import QueryRouter
+from backend.document_parser import ParsedElement
+from backend.chunker import create_multi_vector_chunks
+from backend.ollama_client import get_ollama_client
 from threading import RLock
 
 logger = logging.getLogger(__name__)

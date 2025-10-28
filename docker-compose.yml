@@ -46,6 +46,7 @@ services:
       - .env   
     volumes:
       - ollama_data:/root/.ollama
+      - ./models:/root/.ollama/models
     networks:
       - rag_network
     restart: always

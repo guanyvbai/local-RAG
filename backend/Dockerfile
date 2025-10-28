@@ -26,7 +26,7 @@ COPY backend/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
 
 
-COPY backend/ .
+COPY backend/ /app/backend
 COPY frontend/ /app/frontend
 
 COPY backend/entrypoint.sh .
@@ -34,4 +34,4 @@ RUN chmod +x entrypoint.sh
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
+CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]

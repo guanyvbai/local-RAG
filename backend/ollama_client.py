@@ -13,7 +13,7 @@ from typing import Any, Optional, Iterable
 
 import ollama
 
-import config
+from backend import config
 
 
 class _LockReleasingIterator:

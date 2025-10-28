@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 # 【核心修改】使用新的环境变量 APP_DATABASE_URL
 APP_DATABASE_URL = os.getenv("APP_DATABASE_URL")
+DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")
+DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD")
 
 if not APP_DATABASE_URL:
     logger.critical("错误：环境变量 APP_DATABASE_URL 未设置！应用无法启动。")
@@ -69,12 +71,25 @@ def init_db():
         logger.info("应用数据库的表已检查并按需创建。")
         db = next(get_db())
         admin_user = db.query(User).filter(User.username == "admin").first()
-        if not admin_user:
-            hashed_password = get_password_hash("admin")
-            db_user = User(username="admin", hashed_password=hashed_password)
-            db.add(db_user)
-            db.commit()
-            logger.info("默认 admin 用户已在应用数据库中创建。")
+        if DEFAULT_ADMIN_USERNAME:
+            admin_user = db.query(User).filter(User.username == DEFAULT_ADMIN_USERNAME).first()
+            if not admin_user:
+                if DEFAULT_ADMIN_PASSWORD:
+                    hashed_password = get_password_hash(DEFAULT_ADMIN_PASSWORD)
+                    db_user = User(username=DEFAULT_ADMIN_USERNAME, hashed_password=hashed_password)
+                    db.add(db_user)
+                    db.commit()
+                    logger.info(
+                        "默认管理员用户 '%s' 已在应用数据库中创建。",
+                        DEFAULT_ADMIN_USERNAME,
+                    )
+                else:
+                    logger.warning(
+                        "未设置 DEFAULT_ADMIN_PASSWORD，跳过创建默认管理员用户 '%s'。",
+                        DEFAULT_ADMIN_USERNAME,
+                    )
+        else:
+            logger.info("未指定默认管理员用户名，跳过创建默认管理员用户。")
         db.close()
     except Exception as e:
         logger.error(f"应用数据库初始化时出错: {e}", exc_info=True)

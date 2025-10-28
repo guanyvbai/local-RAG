@@ -13,9 +13,9 @@ from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient, models
 from packaging import version as packaging_version
 from packaging.version import InvalidVersion
-
-import config
-from ollama_client import get_ollama_client
+import uuid
+from backend import config
+from backend.ollama_client import get_ollama_client
 
 logger = logging.getLogger(__name__)
 
@@ -44,18 +44,38 @@ class CVEHandler:
             return []
 
     def _ensure_collection_exists(self):
-        """确保集合存在，并为检索相关的字段创建关键词索引"""
+        """确保集合存在，且具名向量名为 dense，否则强制重建。"""
         try:
-            self.qdrant_client.get_collection(collection_name=self.collection_name)
-        except Exception:
-            logger.warning(f"集合 '{self.collection_name}' 不存在，将自动创建。")
+            info = self.qdrant_client.get_collection(collection_name=self.collection_name)
+            # 用纯 JSON 方式拿到 vectors 配置，避免被 Pydantic 对象结构绕过
+            vectors_json = json.loads(info.json())["result"]["config"]["params"]["vectors"]
+
+            rebuild_needed = False
+            # 若没有 dense 或是匿名结构（仅含 size/distance）
+            if "dense" not in vectors_json or set(vectors_json.keys()) == {"size", "distance"}:
+                rebuild_needed = True
+
+            if rebuild_needed:
+                logger.warning(f"集合 '{self.collection_name}' 缺少具名向量 'dense'，正在强制重建...")
+                self.qdrant_client.recreate_collection(
+                    collection_name=self.collection_name,
+                    vectors_config={
+                        "dense": models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)
+                    }
+                )
+                logger.info(f"✅ 集合 '{self.collection_name}' 已重建。")
+
+        except Exception as e:
+            logger.warning(f"集合 '{self.collection_name}' 不存在或获取失败，将自动创建。原因: {e}")
             self.qdrant_client.recreate_collection(
                 collection_name=self.collection_name,
-
                 vectors_config={
                     "dense": models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)
                 }
             )
+            logger.info(f"✅ 集合 '{self.collection_name}' 已创建。")
+
+        # 为必要字段建索引
         for field_name in ["cve_id", "cpes", "cpe_cores", "vendor", "product", "part"]:
             try:
                 self.qdrant_client.create_payload_index(
@@ -66,6 +86,7 @@ class CVEHandler:
             except Exception as e:
                 if "already exists" not in str(e).lower():
                     logger.warning(f"为字段 '{field_name}' 创建索引失败: {e}")
+
 
     def _normalize_cpe_to_core(self, cpe_string: str) -> str:
         """将CPE 2.2或2.3字符串标准化为核心组件格式 (part:vendor:product:version)"""
@@ -189,13 +210,15 @@ class CVEHandler:
                     "severity": severity,
                     "cpes": cpe_strings_2_3,
                     "cpe_cores": cpe_cores,
-                    "cpe_entries": cpe_entries,
+                    # ✅ 序列化存储复杂结构
+                    "cpe_entries": json.dumps(cpe_entries, ensure_ascii=False),
                     "vendor": sorted(vendor_set),
                     "product": sorted(product_set),
                     "part": sorted(part_set),
                 }
+                logger.debug(f"示例payload结构: {json.dumps(payload, ensure_ascii=False)[:500]}")
                 points_to_upsert.append(models.PointStruct(
-                    id=cve_id,
+                    id=str(uuid.uuid5(uuid.NAMESPACE_URL, cve_id)), 
                     vector={"dense": vector},
                     payload=payload
                 ))

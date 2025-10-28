@@ -31,13 +31,13 @@ from pathlib import Path
 import uuid
 
 # 导入我们自己的模块
-import config
-import auth
-import document_parser
-from rag_handler import get_rag_handler, get_rag_handler_status
-from sql_query_handler import get_sql_query_handler, get_sql_handler_status
-from cve_handler import cve_handler
-from database import User as DBUser, Chat as DBChat, Message as DBMessage, init_db, get_db
+from backend import config
+from backend import auth
+from backend import document_parser
+from backend.rag_handler import get_rag_handler, get_rag_handler_status
+from backend.sql_query_handler import get_sql_query_handler, get_sql_handler_status
+from backend.cve_handler import cve_handler
+from backend.database import User as DBUser, Chat as DBChat, Message as DBMessage, init_db, get_db
 
 logger = logging.getLogger(__name__)
 

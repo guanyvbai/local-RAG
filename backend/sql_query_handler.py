@@ -14,8 +14,8 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import Response
 
-import config
-from ollama_client import get_ollama_client
+from backend import config
+from backend.ollama_client import get_ollama_client
 
 from threading import RLock
 

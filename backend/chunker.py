@@ -13,8 +13,8 @@ import json
 import re
 from typing import List, Dict, Any, TYPE_CHECKING
 
-import config
-from ollama_client import get_ollama_client
+from backend import config
+from backend.ollama_client import get_ollama_client
 
 # 避免循环导入
 if TYPE_CHECKING:
