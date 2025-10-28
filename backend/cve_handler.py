@@ -46,35 +46,44 @@ class CVEHandler:
     def _ensure_collection_exists(self):
         """确保集合存在，且具名向量名为 dense，否则强制重建。"""
         try:
-            info = self.qdrant_client.get_collection(collection_name=self.collection_name)
-            # 用纯 JSON 方式拿到 vectors 配置，避免被 Pydantic 对象结构绕过
-            vectors_json = json.loads(info.json())["result"]["config"]["params"]["vectors"]
+            collection_exists = self.qdrant_client.collection_exists(self.collection_name)
+        except Exception as e:
+            logger.warning(
+                "检测集合 '%s' 是否存在时出错 (原因: %s)，将尝试在缺失时重新创建。",
+                self.collection_name,
+                e,
+            )
+            collection_exists = False
 
-            rebuild_needed = False
-            # 若没有 dense 或是匿名结构（仅含 size/distance）
-            if "dense" not in vectors_json or set(vectors_json.keys()) == {"size", "distance"}:
-                rebuild_needed = True
-
-            if rebuild_needed:
-                logger.warning(f"集合 '{self.collection_name}' 缺少具名向量 'dense'，正在强制重建...")
-                self.qdrant_client.recreate_collection(
+        if collection_exists:
+            try:
+                collection_info = self.qdrant_client.get_collection(collection_name=self.collection_name)
+                logger.info(
+                    # "集合 '%s' 已存在，将直接使用 (vectors_count=%s)。",
+                    self.collection_name,
+                    getattr(collection_info, "vectors_count", "unknown"),
+                )
+            except Exception as e:
+                logger.debug(
+                    "获取集合 '%s' 的详细信息失败，但集合已确认存在: %s",
+                    self.collection_name,
+                    e,
+                )
+        else:
+            logger.warning(f"集合 '{self.collection_name}' 不存在，将自动创建。")
+            try:
+                self.qdrant_client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config={
                         "dense": models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)
                     }
                 )
-                logger.info(f"✅ 集合 '{self.collection_name}' 已重建。")
-
-        except Exception as e:
-            logger.warning(f"集合 '{self.collection_name}' 不存在或获取失败，将自动创建。原因: {e}")
-            self.qdrant_client.recreate_collection(
-                collection_name=self.collection_name,
-                vectors_config={
-                    "dense": models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE)
-                }
-            )
-            logger.info(f"✅ 集合 '{self.collection_name}' 已创建。")
-
+                logger.info(f"✅ 集合 '{self.collection_name}' 已创建。")
+            except Exception as e:
+                if "already exists" in str(e).lower():
+                    logger.info(f"集合 '{self.collection_name}' 已在创建过程中检测到，无需重复创建。")
+                else:
+                    raise
         # 为必要字段建索引
         for field_name in ["cve_id", "cpes", "cpe_cores", "vendor", "product", "part"]:
             try:
