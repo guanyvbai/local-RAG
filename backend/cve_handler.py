@@ -215,7 +215,7 @@ class CVEHandler:
                     "cpes": cpe_strings_2_3,
                     "cpe_cores": cpe_cores,
                     # ✅ 序列化存储复杂结构
-                    "cpe_entries": json.dumps(cpe_entries, ensure_ascii=False),
+                    "cpe_entries": cpe_entries, 
                     "vendor": sorted(vendor_set),
                     "product": sorted(product_set),
                     "part": sorted(part_set),

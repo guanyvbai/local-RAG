@@ -288,10 +288,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             // 读取 webhook 返回文本
             const responseText = await response.text();
-
-            // 调试辅助
-            const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
-            function tryParseJSON(txt){ try { return JSON.parse(txt); } catch { return null; } }
+function tryParseJSON(txt){ try { return JSON.parse(txt); } catch { return null; } }
             function extractJSONArrayFromText(txt){
               const m = txt && txt.match(/\[[\s\S]*\]/);
               return m ? tryParseJSON(m[0]) : null;
@@ -305,14 +302,6 @@ document.addEventListener('DOMContentLoaded', async () => {
               }
               return null;
             }
-            function debugPanel(info){
-              if(!DEBUG) return;
-              const box = document.createElement('pre');
-              box.style.cssText='position:fixed;right:8px;bottom:8px;max-width:48vw;max-height:40vh;overflow:auto;background:#0b1021;color:#d1e2ff;border:1px solid #3a4a7a;border-radius:8px;padding:8px;font-size:12px;z-index:9999';
-              box.textContent='[N8N DEBUG]\n'+JSON.stringify(info,null,2);
-              document.body.appendChild(box);
-            }
-
             let parsed = tryParseJSON(responseText);
             let rows = null;
 
@@ -321,16 +310,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             const hasCveId = isArray && parsed.some(x => x && typeof x === 'object' && 'cve_id' in x);
             const selectedWorkflowLabel = workflowSelector?.selectedOptions?.[0]?.textContent?.trim() || '';
             const isCveWorkflow = (workflow === 'cve_query') || selectedWorkflowLabel.includes('CVE关联分析');
-
-            debugPanel({
-              workflow,
-              selectedWorkflowLabel,
-              responseTextSample: responseText.slice(0, 400),
-              parseOk: parsed !== null,
-              isArray, isObjectArray, hasCveId, length: isArray ? parsed.length : undefined,
-              firstKeys: isObjectArray ? Object.keys(parsed[0] || {}).slice(0, 10) : undefined,
-            });
-
             if (isObjectArray && hasCveId) {
               displayVulnerabilities(question, parsed, assistantMessageElem);
               await saveMessage('assistant', `__VULN_PAYLOAD__${JSON.stringify({ cpe: question, vulnerabilities: parsed })}`);
@@ -475,8 +454,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       };
 
       const headerText = query
-        ? `针对 <strong>${escapeHtml(query)}</strong> 返回了 <b>${rows.length}</b> 条结构化数据：`
-        : `共 <b>${rows.length}</b> 条结构化数据：`;
+        ? `针对 <strong>${escapeHtml(query)}</strong> 查询到了 <b>${rows.length}</b> 条资产数据：`
+        : `共 <b>${rows.length}</b> 条资产数据：`;
 
       let html = `<p>${headerText}</p>`;
       html += `<div class="structured-table-wrapper"><table class="structured-table">`;
