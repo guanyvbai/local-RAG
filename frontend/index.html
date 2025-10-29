@@ -298,12 +298,23 @@ document.addEventListener('DOMContentLoaded', async () => {
             try {
                 const parsed = JSON.parse(responseText);
                 if (Array.isArray(parsed) && parsed.length > 0) {
-                    if (workflow === 'cpe_query' && parsed[0] && parsed[0].cve_id) {
+                    const isObjectArray = parsed.every(item => item && typeof item === 'object' && !Array.isArray(item));
+                    const hasCveIdField = parsed.some(item => item && typeof item === 'object' && 'cve_id' in item);
+                    if (workflow === 'cpe_query' && hasCveIdField) {
                         displayVulnerabilities(question, parsed, assistantMessageElem);
                         await saveMessage('assistant', `__VULN_PAYLOAD__${JSON.stringify({cpe: question, vulnerabilities: parsed})}`);
                         return;
                     }
-                    if (workflow === 'cve_query' && parsed.every(item => item && typeof item === 'object' && !Array.isArray(item))) {
+
+                    const selectedWorkflowLabel = workflowSelector.selectedOptions?.[0]?.textContent?.trim() || '';
+                    const isCveWorkflow = workflow === 'cve_query' || selectedWorkflowLabel.includes('CVE关联分析');
+                    if (isCveWorkflow && isObjectArray && !hasCveIdField) {
+                        displayStructuredData(parsed, assistantMessageElem, question);
+                        await saveMessage('assistant', `__TABLE_PAYLOAD__${JSON.stringify({query: question, rows: parsed})}`);
+                        return;
+                    }
+
+                    if (!hasCveIdField && isObjectArray && workflow !== 'cpe_query') {
                         displayStructuredData(parsed, assistantMessageElem, question);
                         await saveMessage('assistant', `__TABLE_PAYLOAD__${JSON.stringify({query: question, rows: parsed})}`);
                         return;
@@ -414,6 +425,60 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         const headerText = query ? `针对 <strong>${escapeHtml(query)}</strong> 返回了 ${rows.length} 条资产数据：` : `共 ${rows.length} 条资产数据：`;
+        let html = `<p>${headerText}</p>`;
+        html += '<div class="structured-table-wrapper">';
+        html += '<table class="structured-table">';
+        html += '<thead><tr>' + columns.map(col => `<th>${escapeHtml(col)}</th>`).join('') + '</tr></thead>';
+        html += '<tbody>';
+        rows.forEach(row => {
+            html += '<tr>' + columns.map(col => `<td>${formatCellValue(row ? row[col] : undefined)}</td>`).join('') + '</tr>';
+        });
+        html += '</tbody></table></div>';
+        element.innerHTML = html;
+        chatLog.parentElement.scrollTop = chatLog.parentElement.scrollHeight;
+    }
+
+    function escapeHtml(value) {
+        if (value === null || value === undefined) return '';
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function formatCellValue(value) {
+        if (value === null || value === undefined || value === '') return '—';
+        if (typeof value === 'object') {
+            try {
+                return escapeHtml(JSON.stringify(value));
+            } catch (e) {
+                return '—';
+            }
+        }
+        return escapeHtml(value);
+    }
+
+    function displayStructuredData(rows, element, query = '') {
+        if (!Array.isArray(rows) || rows.length === 0) {
+            element.innerHTML = `<p>未检测到可展示的结构化数据。</p>`;
+            return;
+        }
+
+        const columnSet = new Set();
+        rows.forEach(row => {
+            if (row && typeof row === 'object' && !Array.isArray(row)) {
+                Object.keys(row).forEach(key => columnSet.add(key));
+            }
+        });
+        const columns = Array.from(columnSet);
+        if (columns.length === 0) {
+            element.innerHTML = `<p>未检测到可展示的结构化数据。</p>`;
+            return;
+        }
+
+        const headerText = query ? `针对 <strong>${escapeHtml(query)}</strong> 返回了 ${rows.length} 条结构化数据：` : `共 ${rows.length} 条结构化数据：`;
         let html = `<p>${headerText}</p>`;
         html += '<div class="structured-table-wrapper">';
         html += '<table class="structured-table">';
