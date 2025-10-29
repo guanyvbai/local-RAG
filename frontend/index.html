@@ -64,12 +64,48 @@
         .cve-severity.HIGH { background-color: #c53818; }
         .cve-severity.MEDIUM { background-color: #d19a66; }
         .cve-severity.LOW { background-color: #56b6c2; }
-        .structured-table-wrapper { border: 1px solid var(--border-color); border-radius: 8px; margin-top: 1rem; overflow-x: auto; }
-        .structured-table { width: 100%; min-width: 600px; border-collapse: collapse; font-size: 0.85rem; }
-        .structured-table thead { background-color: #2c2d2f; }
-        .structured-table th, .structured-table td { padding: 0.6rem 0.9rem; text-align: left; border-bottom: 1px solid var(--border-color); vertical-align: top; }
-        .structured-table tbody tr:last-child td { border-bottom: none; }
-        .structured-table td { word-break: break-all; }
+.structured-table-wrapper {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-top: 0.5rem;
+  overflow: auto;
+  background:#111;
+}
+.structured-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;       /* 按内容自动分配列宽 */
+  font-size: 0.9rem;
+  min-width: 720px;
+}
+.structured-table thead th {
+  position: sticky; top: 0;
+  background: #2c2d2f;
+  color: #fff;
+  font-weight: 600;
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  z-index: 1;
+}
+.structured-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+  word-break: normal;       /* 关键列不拆分字符 */
+  overflow-wrap: anywhere;
+}
+.structured-table tbody tr:nth-child(odd){ background: rgba(255,255,255,0.02); }
+.structured-table tbody tr:hover{ background: rgba(99,102,241,0.08); }
+
+.cell-nowrap{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell-mono{ font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono","Courier New",monospace; }
+.w-id{ max-width:260px; } .w-ip{ max-width:160px; } .w-cpe{ max-width:460px; }
+
+.badge{ display:inline-block; padding:.15rem .45rem; border-radius:.5rem;
+  background:#eef2ff; color:#3730a3; font-size:12px; line-height:1.2; }
+
+.muted{ color:var(--secondary-text-color); }
     </style>
 </head>
 <body>
@@ -294,35 +330,80 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!response.ok) { throw new Error(`HTTP error! Status: ${response.status}`); }
 
             // ✅ 智能检测漏洞JSON数据
-            const responseText = await response.text();
-            try {
-                const parsed = JSON.parse(responseText);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    const isObjectArray = parsed.every(item => item && typeof item === 'object' && !Array.isArray(item));
-                    const hasCveIdField = parsed.some(item => item && typeof item === 'object' && 'cve_id' in item);
-                    if (workflow === 'cpe_query' && hasCveIdField) {
-                        displayVulnerabilities(question, parsed, assistantMessageElem);
-                        await saveMessage('assistant', `__VULN_PAYLOAD__${JSON.stringify({cpe: question, vulnerabilities: parsed})}`);
-                        return;
-                    }
+            // 读取 webhook 响应
+const responseText = await response.text();
 
-                    const selectedWorkflowLabel = workflowSelector.selectedOptions?.[0]?.textContent?.trim() || '';
-                    const isCveWorkflow = workflow === 'cve_query' || selectedWorkflowLabel.includes('CVE关联分析');
-                    if (isCveWorkflow && isObjectArray && !hasCveIdField) {
-                        displayStructuredData(parsed, assistantMessageElem, question);
-                        await saveMessage('assistant', `__TABLE_PAYLOAD__${JSON.stringify({query: question, rows: parsed})}`);
-                        return;
-                    }
+// ============ 调试与工具函数 ============
+const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
+const workflowSelector =
+  document.getElementById('workflow') ||
+  document.querySelector('[data-workflow-select]') ||
+  null;
 
-                    if (!hasCveIdField && isObjectArray && workflow !== 'cpe_query') {
-                        displayStructuredData(parsed, assistantMessageElem, question);
-                        await saveMessage('assistant', `__TABLE_PAYLOAD__${JSON.stringify({query: question, rows: parsed})}`);
-                        return;
-                    }
-                }
-            } catch (e) {
-                console.warn("响应不是标准JSON数组，进入普通渲染");
-            }
+function tryParseJSON(txt){ try { return JSON.parse(txt); } catch { return null; } }
+function extractJSONArrayFromText(txt){
+  const m = txt && txt.match(/\[[\s\S]*\]/); // 抠第一个 [ ... ]
+  return m ? tryParseJSON(m[0]) : null;
+}
+function coerceRows(any){
+  if (Array.isArray(any) && any.length && typeof any[0] === 'object' && !Array.isArray(any[0])) return any;
+  if (typeof any === 'string') return coerceRows(tryParseJSON(any)) || extractJSONArrayFromText(any);
+  if (any && typeof any === 'object'){
+    if (Array.isArray(any.data))  return coerceRows(any.data);
+    if (Array.isArray(any.items)) return coerceRows(any.items);
+  }
+  return null;
+}
+function debugPanel(info){
+  if(!DEBUG) return;
+  const box = document.createElement('pre');
+  box.style.cssText = 'position:fixed;right:8px;bottom:8px;max-width:48vw;max-height:40vh;overflow:auto;background:#0b1021;color:#d1e2ff;border:1px solid #3a4a7a;border-radius:8px;padding:8px;font-size:12px;z-index:9999';
+  box.textContent = '[N8N DEBUG]\n' + JSON.stringify(info, null, 2);
+  document.body.appendChild(box);
+}
+
+// ============ 解析与判定 ============
+let parsed = tryParseJSON(responseText);
+let rows = null; // <<< 先声明，后面统一赋值
+
+const isArray = Array.isArray(parsed);
+const isObjectArray = isArray && parsed.every(x => x && typeof x === 'object' && !Array.isArray(x));
+const hasCveId = isArray && parsed.some(x => x && typeof x === 'object' && 'cve_id' in x);
+const selectedWorkflowLabel = workflowSelector?.selectedOptions?.[0]?.textContent?.trim() || '';
+const isCveWorkflow = (workflow === 'cve_query') || selectedWorkflowLabel.includes('CVE关联分析');
+
+// 调试面板
+debugPanel({
+  workflow,
+  selectedWorkflowLabel,
+  responseTextSample: responseText.slice(0, 400),
+  parseOk: parsed !== null,
+  isArray, isObjectArray, hasCveId, length: isArray ? parsed.length : undefined,
+  firstKeys: isObjectArray ? Object.keys(parsed[0] || {}).slice(0, 10) : undefined,
+});
+
+// ① 漏洞数组优先
+if (isObjectArray && hasCveId) {
+  displayVulnerabilities(question, parsed, assistantMessageElem);
+  await saveMessage('assistant', `__VULN_PAYLOAD__${JSON.stringify({ cpe: question, vulnerabilities: parsed })}`);
+  return;
+}
+
+// ② 资产/通用对象数组（宽松解析）
+rows = isObjectArray ? parsed : (coerceRows(parsed) || extractJSONArrayFromText(responseText));
+
+// ★ 兼容“单对象”：如果 parsed 是 {…}，包成数组
+if (!rows && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+  rows = [parsed];
+}
+
+// 命中对象数组 → 表格渲染
+if (Array.isArray(rows) && rows.length && typeof rows[0] === 'object' && !Array.isArray(rows[0])) {
+  displayStructuredData(rows, assistantMessageElem, question);
+  await saveMessage('assistant', `__TABLE_PAYLOAD__${JSON.stringify({ query: question, rows })}`);
+  return;
+}
+
 
             // ✅ 否则走流式渲染
             const reader = new ReadableStream({
@@ -406,37 +487,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         element.innerHTML = html;
         chatLog.parentElement.scrollTop = chatLog.parentElement.scrollHeight;
     }
-    function displayStructuredData(rows, element, query = '') {
-        if (!Array.isArray(rows) || rows.length === 0) {
-            element.innerHTML = `<p>未检测到可展示的资产数据。</p>`;
-            return;
-        }
 
-        const columnSet = new Set();
-        rows.forEach(row => {
-            if (row && typeof row === 'object' && !Array.isArray(row)) {
-                Object.keys(row).forEach(key => columnSet.add(key));
-            }
-        });
-        const columns = Array.from(columnSet);
-        if (columns.length === 0) {
-            element.innerHTML = `<p>未检测到可展示的资产数据。</p>`;
-            return;
-        }
 
-        const headerText = query ? `针对 <strong>${escapeHtml(query)}</strong> 返回了 ${rows.length} 条资产数据：` : `共 ${rows.length} 条资产数据：`;
-        let html = `<p>${headerText}</p>`;
-        html += '<div class="structured-table-wrapper">';
-        html += '<table class="structured-table">';
-        html += '<thead><tr>' + columns.map(col => `<th>${escapeHtml(col)}</th>`).join('') + '</tr></thead>';
-        html += '<tbody>';
-        rows.forEach(row => {
-            html += '<tr>' + columns.map(col => `<td>${formatCellValue(row ? row[col] : undefined)}</td>`).join('') + '</tr>';
-        });
-        html += '</tbody></table></div>';
-        element.innerHTML = html;
-        chatLog.parentElement.scrollTop = chatLog.parentElement.scrollHeight;
+    function escapeHtml(value) {
+        if (value === null || value === undefined) return '';
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
+
+    function formatCellValue(value) {
+        if (value === null || value === undefined || value === '') return '—';
+        if (typeof value === 'object') {
+            try {
+                return escapeHtml(JSON.stringify(value));
+            } catch (e) {
+                return '—';
+            }
+        }
+        return escapeHtml(value);
+    }
+
+ 
 
     function escapeHtml(value) {
         if (value === null || value === undefined) return '';
@@ -461,91 +536,54 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function displayStructuredData(rows, element, query = '') {
-        if (!Array.isArray(rows) || rows.length === 0) {
-            element.innerHTML = `<p>未检测到可展示的结构化数据。</p>`;
-            return;
-        }
+  if (!Array.isArray(rows) || rows.length === 0) {
+    element.innerHTML = `<p class="muted">未检测到可展示的数据。</p>`;
+    return;
+  }
 
-        const columnSet = new Set();
-        rows.forEach(row => {
-            if (row && typeof row === 'object' && !Array.isArray(row)) {
-                Object.keys(row).forEach(key => columnSet.add(key));
-            }
-        });
-        const columns = Array.from(columnSet);
-        if (columns.length === 0) {
-            element.innerHTML = `<p>未检测到可展示的结构化数据。</p>`;
-            return;
-        }
+  // 按需展示的优先列名；缺失则跳过；其余字段按原顺序展示
+  const preferred = [
+    'report_assets_id','cpe_key','cpe',
+    'asset_id','asset_name','manage_ip',
+    'is_access','system_name','location',
+    'information_model','information_version',
+    'brand_name','update_time'
+  ];
+  const row0 = rows[0];
+  const keysPreferred = preferred.filter(k => k in row0);
+  const keysExtra = Object.keys(row0).filter(k => !keysPreferred.includes(k));
+  const cols = [...keysPreferred, ...keysExtra];
 
-        const headerText = query ? `针对 <strong>${escapeHtml(query)}</strong> 返回了 ${rows.length} 条结构化数据：` : `共 ${rows.length} 条结构化数据：`;
-        let html = `<p>${headerText}</p>`;
-        html += '<div class="structured-table-wrapper">';
-        html += '<table class="structured-table">';
-        html += '<thead><tr>' + columns.map(col => `<th>${escapeHtml(col)}</th>`).join('') + '</tr></thead>';
-        html += '<tbody>';
-        rows.forEach(row => {
-            html += '<tr>' + columns.map(col => `<td>${formatCellValue(row ? row[col] : undefined)}</td>`).join('') + '</tr>';
-        });
-        html += '</tbody></table></div>';
-        element.innerHTML = html;
-        chatLog.parentElement.scrollTop = chatLog.parentElement.scrollHeight;
-    }
+  // 定义每列的样式 class
+  const colClass = {
+    report_assets_id: 'cell-nowrap cell-mono w-id',
+    asset_id:         'cell-nowrap cell-mono w-id',
+    manage_ip:        'cell-nowrap cell-mono w-ip',
+    cpe:              'cell-nowrap cell-mono w-cpe',
+    cpe_key:          'cell-nowrap cell-mono w-cpe',
+  };
 
-    function escapeHtml(value) {
-        if (value === null || value === undefined) return '';
-        return String(value)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
+  // 标题文字
+  const headerText = query
+    ? `针对 <strong>${escapeHtml(query)}</strong> 返回了 <b>${rows.length}</b> 条结构化数据：`
+    : `共 <b>${rows.length}</b> 条结构化数据：`;
 
-    function formatCellValue(value) {
-        if (value === null || value === undefined || value === '') return '—';
-        if (typeof value === 'object') {
-            try {
-                return escapeHtml(JSON.stringify(value));
-            } catch (e) {
-                return '—';
-            }
-        }
-        return escapeHtml(value);
-    }
+  let html = `<p>${headerText}</p>`;
+  html += `<div class="structured-table-wrapper"><table class="structured-table">`;
+  // 表头
+  html += `<thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead><tbody>`;
+  // 每行数据
+  html += rows.map(row => {
+    return `<tr>${cols.map(c => {
+      const val = row?.[c];
+      const cls = colClass[c] || '';
+      return `<td class="${cls}">${formatCellValue(c, val)}</td>`;
+    }).join('')}</tr>`;
+  }).join('');
+  html += `</tbody></table></div>`;
 
-    function displayStructuredData(rows, element, query = '') {
-        if (!Array.isArray(rows) || rows.length === 0) {
-            element.innerHTML = `<p>未检测到可展示的结构化数据。</p>`;
-            return;
-        }
-
-        const columnSet = new Set();
-        rows.forEach(row => {
-            if (row && typeof row === 'object' && !Array.isArray(row)) {
-                Object.keys(row).forEach(key => columnSet.add(key));
-            }
-        });
-        const columns = Array.from(columnSet);
-        if (columns.length === 0) {
-            element.innerHTML = `<p>未检测到可展示的结构化数据。</p>`;
-            return;
-        }
-
-        const headerText = query ? `针对 <strong>${escapeHtml(query)}</strong> 返回了 ${rows.length} 条结构化数据：` : `共 ${rows.length} 条结构化数据：`;
-        let html = `<p>${headerText}</p>`;
-        html += '<div class="structured-table-wrapper">';
-        html += '<table class="structured-table">';
-        html += '<thead><tr>' + columns.map(col => `<th>${escapeHtml(col)}</th>`).join('') + '</tr></thead>';
-        html += '<tbody>';
-        rows.forEach(row => {
-            html += '<tr>' + columns.map(col => `<td>${formatCellValue(row ? row[col] : undefined)}</td>`).join('') + '</tr>';
-        });
-        html += '</tbody></table></div>';
-        element.innerHTML = html;
-        chatLog.parentElement.scrollTop = chatLog.parentElement.scrollHeight;
-    }
-
+  element.innerHTML = html;
+}
     function escapeHtml(value) {
         if (value === null || value === undefined) return '';
         return String(value)
