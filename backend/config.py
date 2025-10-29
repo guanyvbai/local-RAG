@@ -12,7 +12,8 @@ FRONTEND_DIR = "/app/frontend"
 AVAILABLE_WORKFLOWS = [
     {"value": "rag_query", "name": "知识库问答"},
     {"value": "sql_query", "name": "数据库查询"},
-    {"value": "vulnerability_lookup", "name": "CPE漏洞查询"}
+    {"value": "cpe_query", "name": "CPE漏洞查询"},
+    {"value": "cve_query", "name": "CVE关联分析"}
 ]
 
 # --- Vector Database (Qdrant) ---

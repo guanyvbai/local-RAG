@@ -58,11 +58,6 @@ class CVEHandler:
         if collection_exists:
             try:
                 collection_info = self.qdrant_client.get_collection(collection_name=self.collection_name)
-                logger.info(
-                    # "集合 '%s' 已存在，将直接使用 (vectors_count=%s)。",
-                    self.collection_name,
-                    getattr(collection_info, "vectors_count", "unknown"),
-                )
             except Exception as e:
                 logger.debug(
                     "获取集合 '%s' 的详细信息失败，但集合已确认存在: %s",
